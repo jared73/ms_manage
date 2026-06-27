@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root { height: 100%; }
+body { margin: 0; }
+
+/* 滚动条样式 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2f3d; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm
+           font-medium transition-colors select-none disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-accent text-white hover:bg-accent-hover; }
+  .btn-ghost   { @apply btn text-fg-muted hover:bg-bg-elev hover:text-fg; }
+  .btn-danger  { @apply btn bg-err/15 text-err hover:bg-err/25; }
+  .btn-ok      { @apply btn bg-ok/15 text-ok hover:bg-ok/25; }
+
+  .card {
+    @apply rounded-lg border border-white/5 bg-bg-subtle p-4;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-white/10 bg-bg px-3 py-1.5 text-sm
+           text-fg placeholder:text-fg-muted/60
+           focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40;
+  }
+
+  .badge { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
+  .badge-ok   { @apply badge bg-ok/15 text-ok; }
+  .badge-warn { @apply badge bg-warn/15 text-warn; }
+  .badge-err  { @apply badge bg-err/15 text-err; }
+  .badge-mute { @apply badge bg-white/5 text-fg-muted; }
+}

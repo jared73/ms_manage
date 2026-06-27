@@ -1,0 +1,461 @@
+//! HTTP/SSE 代理 + MCPR_TOKEN 鉴权（学 mcp-router）
+//!
+//! 启动后在 127.0.0.1:<port> 暴露：
+//! - POST /mcp           —— JSON-RPC over HTTP
+//! - GET  /mcp/sse       —— Server-Sent Events 流
+//!
+//! 鉴权：客户端请求必须带 `Authorization: Bearer <token>`，
+//! token 从 settings.json 读（首次启动随机生成，存盘）。
+//!
+//! 启用场景：Claude Code / Cursor / Cline / Windsurf 等支持远程 MCP 的客户端。
+//! Claude Desktop 仍走 stdio 模式。
+
+use crate::proxy::registry;
+use crate::state::AppState;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+
+pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
+    let settings = state.storage.load_settings().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let token = settings.mcp_token.clone().unwrap_or_default();
+    // 监听 0.0.0.0（同时支持 IPv4 127.0.0.1 和 IPv6 [::1]），但默认配置给客户端的是 127.0.0.1
+    let listen_addr: SocketAddr = ([0, 0, 0, 0], port).into();
+    let listener = TcpListener::bind(&listen_addr).await?;
+    let local = listener.local_addr().ok();
+    eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?} (also reachable via 127.0.0.1:{port})");
+    eprintln!("[ms-manage] token (Authorization: Bearer ...): {token}");
+
+    loop {
+        let (stream, _peer) = listener.accept().await?;
+        let state = state.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_conn(stream, state, token).await {
+                eprintln!("[ai-manage] conn error: {e}");
+            }
+        });
+    }
+}
+
+async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token: String) -> anyhow::Result<()> {
+    let (read, mut write) = stream.split();
+    let mut reader = BufReader::new(read);
+
+    // 极简 HTTP 解析 —— 只支持 GET / POST，足够 MCP 协议
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).await?;
+    let mut headers = std::collections::HashMap::new();
+    let mut content_length: usize = 0;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 || line == "\r\n" || line == "\n" { break; }
+        if let Some((k, v)) = line.split_once(':') {
+            let k = k.trim().to_lowercase();
+            let v = v.trim().to_string();
+            if k == "content-length" {
+                content_length = v.parse().unwrap_or(0);
+            }
+            headers.insert(k, v);
+        }
+    }
+
+    // 解析 query string（用于 token 鉴权 + session_id 路由）
+    let mut query_token = String::new();
+    let mut query_session_id = String::new();
+    if let Some(q_start) = request_line.find('?') {
+        if let Some(q_end) = request_line[q_start..].find(' ') {
+            let qs = &request_line[q_start + 1..q_start + q_end];
+            for kv in qs.split('&') {
+                if let Some((k, v)) = kv.split_once('=') {
+                    match k {
+                        "token" | "access_token" => query_token = urldecode(v),
+                        "session_id" => query_session_id = urldecode(v),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let auth = headers.get("authorization").cloned().unwrap_or_default();
+    let token_ok = auth == format!("Bearer {expected_token}") || query_token == expected_token;
+    if !token_ok {
+        // 健康检查 / SSE endpoint / OPTIONS 都不需要 token（GET 试探开放）
+        let (m2, p2) = {
+            let line = request_line.trim();
+            let mut parts = line.split_whitespace();
+            (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string())
+        };
+        if (m2 == "GET" && (p2 == "/" || p2 == "/health"))
+            || m2 == "OPTIONS"
+            || (m2 == "GET" && (p2 == "/mcp/sse" || p2 == "/sse" || p2 == "/sse/"))
+        {
+            // 走下面的主路由（auth 仍记 MISSING 但不 401）
+        } else {
+            let _ = write_all(&mut write, b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").await;
+            return Ok(());
+        }
+    }
+
+    // 路由
+    let (method, path) = {
+        let line = request_line.trim();
+        let mut parts = line.split_whitespace();
+        let m = parts.next().unwrap_or("").to_string();
+        let p = parts.next().unwrap_or("").to_string();
+        (m, p)
+    };
+
+    // 记录请求路径（调试用）
+    eprintln!("[proxy] {} {} (auth={})", method, path,
+        if auth == format!("Bearer {expected_token}") || query_token == expected_token { "OK" } else { "MISSING" });
+
+    // 把 query string 从 path 里剥掉（`/mcp/sse?token=xxx` → `/mcp/sse`）
+    let path_no_q = path.split('?').next().unwrap_or(&path).to_string();
+
+    match (method.as_str(), path_no_q.as_str()) {
+        ("POST", "/mcp") => {
+            if let Some(st) = crate::state::try_current() {
+                let mut stats = st.storage.proxy_stats.write();
+                stats.total_requests += 1;
+                stats.last_request_at = Some(chrono::Utc::now().to_rfc3339());
+            }
+            let mut body = vec![0u8; content_length];
+            tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await?;
+            let body_str = String::from_utf8_lossy(&body).to_string();
+            // 两种 transport 路径：
+            //   1) 带 ?session_id=xxx → legacy SSE transport：
+            //      POST 立刻返回 202，响应通过 SSE 流送回。Qoder 走这条路。
+            //   2) 不带 session_id → streamable_http / 单请求模式：
+            //      POST 直接返回 SSE-format 响应在 body 里。
+            if !query_session_id.is_empty() && crate::proxy::sessions().has(&query_session_id).await {
+                // 路径 1：session 路由
+                let resp = handle_jsonrpc_to_string(&state, &body_str).await?;
+                if let Some(json) = resp {
+                    let event = format!("event: message\r\ndata: {json}\r\n\r\n");
+                    let _ = crate::proxy::sessions().send(&query_session_id, event).await;
+                }
+                let _ = write_all(&mut write,
+                    b"HTTP/1.1 202 Accepted\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\n\r\n"
+                ).await;
+            } else {
+                // 路径 2：直接返回（SSE 帧格式）
+                handle_jsonrpc(&state, &body_str, &mut write).await?;
+            }
+        }
+        // Qoder / 一些客户端直接用 EventSource(configured_url) 打开 SSE 流，
+        // 不走 /mcp/sse 而是走配置的 /mcp。这种情况下必须返回 SSE + endpoint 事件，
+        // 否则客户端等不到事件就 timeout waiting for endpoint。
+        ("GET", "/mcp") | ("GET", "/mcp/") => {
+            serve_sse_session(&mut write, state.clone()).await?;
+        }
+        // SSE 兼容：旧版 MCP SSE transport + 一些客户端默认路径
+        ("GET", "/mcp/sse") | ("GET", "/sse") | ("GET", "/sse/") => {
+            serve_sse_session(&mut write, state.clone()).await?;
+        }
+        // 健康检查 + 根路径
+        ("GET", "/") | ("GET", "/health") => {
+            let _ = write_all(&mut write,
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ai-manage\",\"version\":\"0.1.0\"}"
+            ).await;
+        }
+        // CORS preflight
+        ("OPTIONS", _) => {
+            let _ = write_all(&mut write,
+                b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Max-Age: 86400\r\n\r\n"
+            ).await;
+        }
+        // 未知路径：返回 405 + Allow header 而不是 404，避免客户端重试循环
+        _ if method == "POST" => {
+            // 任何 POST 都当作 JSON-RPC 处理（宽容模式）
+            if let Some(st) = crate::state::try_current() {
+                let mut stats = st.storage.proxy_stats.write();
+                stats.total_requests += 1;
+                stats.last_request_at = Some(chrono::Utc::now().to_rfc3339());
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await;
+            let body_str = String::from_utf8_lossy(&body).to_string();
+            eprintln!("[proxy] unknown POST path {}, treating as /mcp", path);
+            handle_jsonrpc(&state, &body_str, &mut write).await?;
+        }
+        _ => {
+            eprintln!("[proxy] unknown {} {}, returning 405", method, path);
+            let _ = write_all(&mut write,
+                b"HTTP/1.1 405 Method Not Allowed\r\nAccess-Control-Allow-Origin: *\r\nAllow: GET, POST, OPTIONS\r\nContent-Length: 0\r\n\r\n"
+            ).await;
+        }
+    }
+    Ok(())
+}
+
+async fn write_all<W: tokio::io::AsyncWrite + Unpin>(w: &mut W, buf: &[u8]) -> std::io::Result<()> {
+    w.write_all(buf).await?;
+    w.flush().await
+}
+
+/// 简单 URL decode（仅处理 %XX 和 +）
+fn urldecode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((h << 4) | l);
+                i += 3;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// 处理单个 JSON-RPC 请求，把响应 JSON 序列化为字符串（用于 SSE session 路由）
+async fn handle_jsonrpc_to_string(state: &AppState, body: &str) -> anyhow::Result<Option<String>> {
+    let req: serde_json::Value = serde_json::from_str(body)?;
+    let id = req.get("id").cloned();
+    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let params = req.get("params").cloned().unwrap_or(serde_json::Value::Null);
+
+    let resp = match method.as_str() {
+        "initialize" => Some(serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": { "listChanged": false } },
+                "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+            }
+        })),
+        "ping" => Some(jsonrpc_ok(id, serde_json::json!({}))),
+        "tools/list" => Some(http_tools_list(state, id).await),
+        "tools/call" => Some(http_tools_call(state, id, params).await),
+        _ => {
+            if id.is_some() {
+                Some(serde_json::json!({
+                    "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                    "error": { "code": -32601, "message": format!("Method not found: {method}") }
+                }))
+            } else { None }
+        }
+    };
+
+    Ok(resp.map(|r| serde_json::to_string(&r).unwrap_or_default()))
+}
+
+/// SSE 长连接处理：发 endpoint 事件 + 持有 session + 转发响应 + 心跳
+async fn serve_sse_session<W: tokio::io::AsyncWrite + Unpin>(
+    write: &mut W,
+    _state: Arc<AppState>,
+) -> anyhow::Result<()> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    crate::proxy::sessions().insert(session_id.clone(), tx).await;
+
+    let _ = write_all(write,
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n"
+    ).await;
+    // endpoint 事件：把 session_id 放在 query string 里，client POST 时带上
+    let endpoint_data = format!("/mcp?session_id={session_id}");
+    let _ = write_all(write,
+        format!("event: endpoint\r\ndata: {endpoint_data}\r\n\r\n").as_bytes()
+    ).await;
+
+    loop {
+        tokio::select! {
+            // POST handler 通过 channel 推过来的响应
+            Some(msg) = rx.recv() => {
+                if write_all(write, msg.as_bytes()).await.is_err() { break; }
+            }
+            // 15s 心跳保活（SSE 客户端会断开不活跃的连接）
+            _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
+                if write_all(write, b": ping\r\n\r\n").await.is_err() { break; }
+            }
+        }
+    }
+    crate::proxy::sessions().remove(&session_id).await;
+    Ok(())
+}
+
+/// 处理单个 JSON-RPC 请求（MCP 协议），返回响应字符串
+async fn handle_jsonrpc<W: tokio::io::AsyncWrite + Unpin>(
+    state: &AppState,
+    body: &str,
+    write: &mut W,
+) -> anyhow::Result<()> {
+    let req: serde_json::Value = serde_json::from_str(body)?;
+    let id = req.get("id").cloned();
+    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    let params = req.get("params").cloned().unwrap_or(serde_json::Value::Null);
+
+    let resp = match method.as_str() {
+        "initialize" => Some(serde_json::json!({
+            "jsonrpc": "2.0", "id": id.clone().unwrap_or(serde_json::Value::Null),
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": { "listChanged": false } },
+                "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+            }
+        })),
+        "ping" => Some(jsonrpc_ok(id.clone(), serde_json::json!({}))),
+        "tools/list" => Some(http_tools_list(state, id.clone()).await),
+        "tools/call" => Some(http_tools_call(state, id.clone(), params).await),
+        _ => {
+            if id.is_some() {
+                Some(serde_json::json!({
+                    "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                    "error": { "code": -32601, "message": format!("Method not found: {method}") }
+                }))
+            } else { None }
+        }
+    };
+
+    if let Some(r) = resp {
+        let s = serde_json::to_string(&r)?;
+        // Streamable HTTP transport 要求 POST /mcp 的响应是 text/event-stream 格式
+        // （event: message + data: <json>\n\n），不能用裸 application/json，
+        // 否则 Qoder / 现代 Claude Desktop 这类客户端会卡在 "waiting for endpoint"。
+        // 同时保留裸 JSON 作为 fallback：很多简单 client 两种都吃。
+        let body = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\n\r\nevent: message\r\ndata: {s}\r\n\r\n"
+        );
+        write_all(write, body.as_bytes()).await?;
+    } else {
+        // notification（无 id）：204 No Content 即可，客户端不期待响应
+        write_all(write, b"HTTP/1.1 204 No Content\r\n\r\n").await?;
+    }
+    Ok(())
+}
+
+fn jsonrpc_ok(id: Option<serde_json::Value>, result: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null), "result": result })
+}
+
+async fn http_tools_list(state: &AppState, id: Option<serde_json::Value>) -> serde_json::Value {
+    let servers = match state.storage.load_servers() {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32603, "message": format!("load: {e}") }
+        }),
+    };
+    // 只返回已在 registry 中运行的 server 的 tools（不自动 spawn）
+    let mut all_tools: Vec<serde_json::Value> = Vec::new();
+    let reg = registry();
+    for s in &servers {
+        if !s.enabled || s.transport != "stdio" {
+            continue;
+        }
+        // 过滤掉用户在 GUI 里关闭的工具
+        let disabled: std::collections::HashSet<&str> = s.disabled_tools.iter().map(|s| s.as_str()).collect();
+        // 只处理已在 registry 中的 server（用户手动启动的）
+        if let Some(child) = reg.get(&s.id).await {
+            let srv = child.lock().await;
+            // iter() 而非 drain(..) —— 客户端会反复调 tools/list，
+            // drain 会把缓存清空，第二次起就拿不到工具了
+            for tool in srv.tools.iter() {
+                let orig_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                if disabled.contains(orig_name.as_str()) {
+                    continue;
+                }
+                let mut t = tool.clone();
+                if let Some(obj) = t.as_object_mut() {
+                    obj.insert("name".into(), serde_json::Value::String(format!("{}__{}", s.name, orig_name)));
+                }
+                all_tools.push(t);
+            }
+        }
+    }
+    jsonrpc_ok(id, serde_json::json!({ "tools": all_tools }))
+}
+
+async fn http_tools_call(state: &AppState, id: Option<serde_json::Value>, params: serde_json::Value) -> serde_json::Value {
+    let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+    let arguments = params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+    let (server_name, tool_name) = match name.split_once("__") {
+        Some((a, b)) => (a.to_string(), b.to_string()),
+        None => return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32602, "message": format!("tool name '{name}' must be prefixed with '<server>__'") }
+        }),
+    };
+    let servers = match state.storage.load_servers() {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32603, "message": format!("load: {e}") }
+        }),
+    };
+    let srv = match servers.iter().find(|s| s.name == server_name && s.enabled) {
+        Some(s) => s.clone(),
+        None => return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32602, "message": format!("server '{server_name}' not found or disabled") }
+        }),
+    };
+    // 只允许调用已在 registry 中的 server（用户手动启动的）
+    let reg = registry();
+    let child = match reg.get(&srv.id).await {
+        Some(c) => c,
+        None => return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32603, "message": format!("server '{server_name}' is not running, please start it first") }
+        }),
+    };
+    let mut child = child.lock().await;
+    let call_id = child.next_id();
+    let req = serde_json::json!({
+        "jsonrpc": "2.0", "id": call_id,
+        "method": "tools/call",
+        "params": { "name": tool_name, "arguments": arguments }
+    });
+    use tokio::io::AsyncWriteExt;
+    if let Err(e) = child.stdin.write_all(format!("{}\n", req).as_bytes()).await {
+        return serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32603, "message": format!("write: {e}") }
+        });
+    }
+    let _ = child.stdin.flush().await;
+    let mut line = String::new();
+    let read = tokio::time::timeout(std::time::Duration::from_secs(120), child.stdout.read_line(&mut line)).await;
+    match read {
+        Ok(Ok(_)) => match serde_json::from_str::<serde_json::Value>(line.trim()) {
+            Ok(mut v) => {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("id".into(), id.unwrap_or(serde_json::Value::Null));
+                }
+                v
+            }
+            Err(e) => serde_json::json!({
+                "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                "error": { "code": -32603, "message": format!("invalid response: {e}") }
+            }),
+        },
+        _ => serde_json::json!({
+            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+            "error": { "code": -32603, "message": "timeout" }
+        }),
+    }
+}

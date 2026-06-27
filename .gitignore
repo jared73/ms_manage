@@ -1,0 +1,42 @@
+# Rust
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Node
+node_modules/
+dist/
+.vite/
+.npm/
+.pnpm-store/
+*.tsbuildinfo
+.eslintcache
+
+# Tauri 生成
+src-tauri/gen/
+
+# 系统 / IDE
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+*.iml
+
+# Claude / 编辑器配置
+.claude/
+
+# 用户数据 / 临时 / 日志
+*.log
+*.tmp
+.env
+.env.local
+.env.*
+
+# Windows 临时
+$RECYCLE.BIN/
+desktop.ini
+
+# 中间产物（不是程序的一部分）
+src-tauri/icons/icon-multi.ico
+src-tauri/icons/icon-source.png
