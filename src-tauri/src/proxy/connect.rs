@@ -243,7 +243,7 @@ async fn handle_jsonrpc_to_string(state: &AppState, body: &str) -> anyhow::Resul
         "initialize" => Some(serde_json::json!({
             "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-03-26",
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
             }
@@ -313,7 +313,7 @@ async fn handle_jsonrpc<W: tokio::io::AsyncWrite + Unpin>(
         "initialize" => Some(serde_json::json!({
             "jsonrpc": "2.0", "id": id.clone().unwrap_or(serde_json::Value::Null),
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-03-26",
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
             }
