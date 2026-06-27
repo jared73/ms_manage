@@ -159,27 +159,27 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     if cmd_str.trim().is_empty() {
         anyhow::bail!("command 字段为空，请在编辑对话框中填写可执行文件路径（如 npx、uvx、python 等）");
     }
-    // Windows 上 npx 这种命令实际可能是 npx.cmd，Rust 不会自动补扩展名。
-    // 先用 `where` 解析到绝对路径再 spawn。
+    // Windows 上 npx / uvx 这种命令需要先解析成绝对路径，
+    // uvx 再绕过到缓存的 .exe（避免 uvx 内部 conhost 闪窗）。
     let resolved = crate::process_util::resolve_cmd(cmd_str);
-    let mut c = Command::new(&resolved);
-    c.args(srv.args.iter());
+    let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &srv.args);
+
+    let mut c = Command::new(&final_cmd);
+    c.args(final_args.iter());
     if let Some(cwd) = &srv.cwd { c.current_dir(cwd); }
     for (k, v) in &srv.env { c.env(k, v); }
     inject_npm_registry(&mut c);
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     c.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut c);
-    let mut child = match c.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            let friendly = crate::diagnose::friendly_spawn_error(cmd_str, &e);
-            if let Some(st) = crate::state::try_current() {
-                st.storage.live_states.write().insert(srv.id.clone(), ServerStatus::Error.as_str().to_string());
-            }
-            anyhow::bail!("{}", friendly);
+    let mut child = c.spawn().map_err(|e| {
+        let friendly = crate::diagnose::friendly_spawn_error(cmd_str, &e);
+        if let Some(st) = crate::state::try_current() {
+            st.storage.live_states.write().insert(srv.id.clone(), ServerStatus::Error.as_str().to_string());
         }
-    };
+        anyhow::anyhow!("{}", friendly)
+    })?;
+
     let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
     let stderr = child.stderr.take();
@@ -309,8 +309,9 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     let cmd_str = s.command.as_deref().filter(|c| !c.is_empty())
         .ok_or_else(|| "command is empty".to_string())?;
     let resolved = crate::process_util::resolve_cmd(cmd_str);
-    let mut command = Command::new(&resolved);
-    command.args(s.args.iter());
+    let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
+    let mut command = Command::new(&final_cmd);
+    command.args(final_args.iter());
     if let Some(cwd) = &s.cwd { command.current_dir(cwd); }
     for (k, v) in &s.env { command.env(k, v); }
     inject_npm_registry(&mut command);
@@ -364,8 +365,9 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     };
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let started = std::time::Instant::now();
-    let mut command = Command::new(&resolved);
-    command.args(s.args.iter());
+    let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
+    let mut command = Command::new(&final_cmd);
+    command.args(final_args.iter());
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut command);
