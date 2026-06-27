@@ -81,14 +81,18 @@ export function Skills() {
   };
 
   const handleDelete = async (s: Skill) => {
-    if (!confirm(t("skills.delete_confirm"))) return;
-    await deleteSkill(s.id);
-    await load();
+    try {
+      await deleteSkill(s.id);
+      await load();
+      toast.success(`已删除 "${s.name}"`, { duration: 2000 });
+    } catch (e) {
+      toast.error(`删除失败: ${e}`);
+    }
   };
 
   const handleToggle = async (s: Skill) => {
     try { await toggleSkill(s.id, !s.enabled); await load(); }
-    catch (e) { alert(`toggle failed: ${e}`); }
+    catch (e) { toast.error(`切换失败: ${e}`); }
   };
 
   return (
@@ -300,12 +304,16 @@ function TargetRow({ target, onReload }: { target: SkillTarget; onReload: () => 
     catch (e) { toast.error(`切换失败: ${e}`); }
   };
   const handleDelete = async () => {
-    if (!confirm(`删除目标 "${target.name}"？该目录下的 symlink 会被清理。`)) return;
-    try { await removeSkillTarget(target.id); await onReload(); }
-    catch (e) { toast.error(`删除失败: ${e}`); }
+    try {
+      await removeSkillTarget(target.id);
+      await onReload();
+      toast.success(`已删除目标 "${target.name}"`, { duration: 2000 });
+    } catch (e) {
+      toast.error(`删除失败: ${e}`);
+    }
   };
   const handleEditPath = async () => {
-    const newPath = prompt(`修改 "${target.name}" 的路径：`, target.path);
+    const newPath = window.prompt(`修改 "${target.name}" 的路径：`, target.path);
     if (!newPath || newPath === target.path) return;
     try { await updateSkillTarget(target.id, undefined, newPath); await onReload(); toast.success("已更新"); }
     catch (e) { toast.error(`更新失败: ${e}`); }

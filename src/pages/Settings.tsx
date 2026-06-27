@@ -31,7 +31,6 @@ export function Settings() {
   };
 
   const regen = async () => {
-    if (!confirm("重置 token 后所有客户端会立刻断开，需要把新 token 重新写到它们的 mcpServers 配置里。确定继续？")) return;
     try {
       const newToken = await regenerateToken();
       setSettings({ ...settings!, mcp_token: newToken });

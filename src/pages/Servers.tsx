@@ -46,16 +46,28 @@ export function Servers() {
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
 
   const handleDelete = async (s: McpServer) => {
-    if (!confirm(t("servers.delete_confirm"))) return;
-    await deleteServer(s.id);
-    await load();
+    try {
+      await deleteServer(s.id);
+      await load();
+      toast.success(`已删除 "${s.name}"`, { duration: 2000 });
+    } catch (e) {
+      toast.error(`删除失败: ${e}`);
+    }
   };
 
   const handleTest = async (s: McpServer) => {
+    const tid = `test-${s.id}`;
+    toast.loading(`正在测速 ${s.name}...`, { id: tid });
     try {
       const r = await testServer(s.id);
-      alert(r.ok ? `${t("servers.test_ok")} (${r.latency_ms ?? "?"}ms, ${t("servers.tools_count", { n: (r.tools ?? []).length })})` : `${t("servers.test_fail")}: ${r.error}`);
-    } catch (e) { alert(`error: ${e}`); }
+      if (r.ok) {
+        toast.success(`${s.name} 测速成功 (${r.latency_ms ?? "?"}ms, ${(r.tools ?? []).length} 工具)`, { id: tid });
+      } else {
+        toast.error(`${s.name} 测速失败: ${r.error}`, { id: tid });
+      }
+    } catch (e) {
+      toast.error(`测速出错: ${e}`, { id: tid });
+    }
   };
 
   const handleStart = async (s: McpServer) => {
@@ -179,8 +191,12 @@ export function Servers() {
                   const st = states[s.id];
                   const project = projects.find((p) => p.id === s.project_id);
                   return (
-                    <tr key={s.id} className="border-t border-white/5 hover:bg-white/[0.02] cursor-pointer" onClick={() => setViewing(s)}>
-                      <td className="px-3 py-2">
+                    <tr key={s.id} className="border-t border-white/5 hover:bg-white/[0.02]">
+                      <td
+                        className="px-3 py-2 cursor-pointer"
+                        onClick={() => setViewing(s)}
+                        title="点击查看详情"
+                      >
                         <div className="font-medium">{s.name}</div>
                         {s.description && <div className="text-xs text-fg-muted">{s.description}</div>}
                       </td>
@@ -288,13 +304,19 @@ function ProjectsModal({ onClose, onChanged }: { onClose: () => void; onChanged:
         await upsertProject({ ...p, id: "" });
       }
       setEditing(null); setCreating(false); await load(); await onChanged();
-    } catch (e) { alert(`save failed: ${e}`); }
+      toast.success(`项目已保存`, { duration: 1500 });
+    } catch (e) { toast.error(`保存失败: ${e}`); }
   };
 
   const handleDelete = async (p: Project) => {
-    if (!confirm(`删除项目 "${p.name}"？其下的 server 将移到「未分组」。`)) return;
-    try { await deleteProject(p.id); await load(); await onChanged(); }
-    catch (e) { alert(`delete failed: ${e}`); }
+    try {
+      await deleteProject(p.id);
+      await load();
+      await onChanged();
+      toast.success(`已删除项目 "${p.name}"`, { duration: 2000 });
+    } catch (e) {
+      toast.error(`删除项目失败: ${e}`);
+    }
   };
 
   const blank = (): Project => {
@@ -388,7 +410,8 @@ function ServerFormModal({ initial, projects, onClose, onSaved }: {
     try {
       await upsertServer({ ...s, args, env, updated_at: new Date().toISOString() });
       await onSaved();
-    } catch (e) { alert(`save failed: ${e}`); }
+      toast.success(`已保存 "${s.name}"`, { duration: 1500 });
+    } catch (e) { toast.error(`保存失败: ${e}`); }
   };
 
   const applyPreset = (preset: "filesystem" | "fetch" | "github" | "memory") => {
@@ -671,8 +694,30 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
   const [tools, setTools] = useState<McpTool[] | null>(null);
   const [loadingTools, setLoadingTools] = useState(false);
   const [toolsErr, setToolsErr] = useState<string | null>(null);
+  // 本地 tool 启用态覆盖：点 toggle 立刻翻，后台再保存。
+  // 这样用户感觉是即时的；后端保存失败时回滚 + 弹错误 toast。
+  const [localDisabled, setLocalDisabled] = useState<Set<string>>(
+    () => new Set(server.disabled_tools ?? []),
+  );
+  // 当父组件更新 server（外部改了 disabled_tools）时同步本地态
+  useEffect(() => {
+    setLocalDisabled(new Set(server.disabled_tools ?? []));
+  }, [server.disabled_tools]);
 
-  const disabledSet = new Set(server.disabled_tools ?? []);
+  const toggleTool = async (toolName: string, enabled: boolean) => {
+    const prev = new Set(localDisabled);
+    const next = new Set(localDisabled);
+    if (enabled) next.delete(toolName); else next.add(toolName);
+    setLocalDisabled(next);  // 立刻翻 —— 用户感觉是即时的
+    try {
+      await setToolEnabled(server.id, toolName, enabled);
+      await onChanged();
+      toast.success(enabled ? `已启用 ${toolName}` : `已关闭 ${toolName}`, { duration: 1200 });
+    } catch (e) {
+      setLocalDisabled(prev);  // 回滚
+      toast.error(`设置失败: ${e}`);
+    }
+  };
 
   const loadTools = async () => {
     setLoadingTools(true);
@@ -693,18 +738,6 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
       void loadTools();
     }
   }, [tab]);
-
-  const toggleTool = async (toolName: string, enabled: boolean) => {
-    try {
-      await setToolEnabled(server.id, toolName, enabled);
-      await onChanged();
-      if (tools) {
-        setTools([...tools]);
-      }
-    } catch (e) {
-      toast.error(`设置失败: ${e}`);
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
@@ -733,8 +766,8 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
             onClick={() => setTab("tools")}
           >
             Tools
-            {server.disabled_tools && server.disabled_tools.length > 0 && (
-              <span className="ml-1 badge-mute text-[10px]">{server.disabled_tools.length} 关闭</span>
+            {localDisabled.size > 0 && (
+              <span className="ml-1 badge-mute text-[10px]">{localDisabled.size} 关闭</span>
             )}
           </button>
         </div>
@@ -815,7 +848,7 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
 
               <div className="space-y-1">
                 {tools?.map((t) => {
-                  const enabled = !disabledSet.has(t.name);
+                  const enabled = !localDisabled.has(t.name);
                   return (
                     <div key={t.name} className={`flex items-start gap-2 rounded-md border px-3 py-2 ${enabled ? "border-white/10 bg-bg-subtle" : "border-white/5 bg-bg-subtle/40 opacity-60"}`}>
                       <button
