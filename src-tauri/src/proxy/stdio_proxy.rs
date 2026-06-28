@@ -5,7 +5,6 @@
 use crate::proxy::registry;
 use crate::storage::Storage;
 use serde_json::Value;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -14,11 +13,23 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 入口：启动 stdio 代理（CLI 子命令 `ai-manage proxy stdio` 调用）
 pub async fn run() -> anyhow::Result<()> {
-    let data_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ai-manage");
-    std::fs::create_dir_all(&data_dir)?;
-    let storage = Arc::new(Storage::new(data_dir)?);
+    // 初始化 AppState（和 GUI 用同一个数据目录 + migration + settings）
+    let state = crate::state::AppState::initialize()
+        .map_err(|e| anyhow::anyhow!("init app state: {e}"))?;
+    let state = std::sync::Arc::new(state);
+    state.clone().install_as_current();
+    let storage = state.storage.clone();
+
+    // 自动启动所有 enabled + auto_start 的 server（和 GUI 行为一致）
+    if let Ok(servers) = storage.load_servers() {
+        for srv in &servers {
+            if srv.enabled && srv.auto_start.unwrap_or(false) && srv.transport == "stdio" {
+                if let Err(e) = crate::proxy::start_one(srv).await {
+                    eprintln!("[auto-start] failed to start {}: {}", srv.name, e);
+                }
+            }
+        }
+    }
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
@@ -111,9 +122,11 @@ async fn handle_tools_list(storage: &Storage, id: Option<Value>) -> Option<Value
         }
         // 只处理已在 registry 中的 server（用户手动启动的）
         if let Some(child) = reg.get(&s.id).await {
-            let mut srv = child.lock().await;
-            for tool in srv.tools.drain(..) {
-                let mut t = tool;
+            let srv = child.lock().await;
+            // iter() 而非 drain(..) —— 客户端会反复调 tools/list，
+            // drain 会把缓存清空，第二次起就拿不到工具了
+            for tool in srv.tools.iter() {
+                let mut t = tool.clone();
                 if let Some(obj) = t.as_object_mut() {
                     let orig = obj.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
                     obj.insert("name".into(), Value::String(format!("{}__{}", s.name, orig)));
