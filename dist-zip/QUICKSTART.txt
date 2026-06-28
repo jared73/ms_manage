@@ -17,10 +17,10 @@ MS Manage v0.1.0 - Windows 绿色版
   ms_manage connect qoder          一键写 Qoder 的 mcp.json
   ms_manage help                   查看全部命令
 
-【5】数据目录（应用首次启动会自动迁移旧 ai-manage 数据）
+【5】数据目录
   %LOCALAPPDATA%\ms-manage\
   - settings.json
   - servers.json
   - skills\        (每个 skill 一个子目录)
   - logs\
-  - ai-manage.pid  (单实例守卫的 PID 文件，名字保留是兼容写法)
+  - ms-manage.pid  (单实例守卫的 PID 文件)

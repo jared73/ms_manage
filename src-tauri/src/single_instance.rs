@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn pid_file_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("ai-manage.pid")
+    data_dir.join("ms-manage.pid")
 }
 
 /// 杀掉旧实例（如果有）。返回 true 表示确实杀了一个进程。

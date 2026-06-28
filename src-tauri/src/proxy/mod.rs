@@ -7,8 +7,8 @@
 //! ```json
 //! {
 //!   "mcpServers": {
-//!     "ai-manage": {
-//!       "command": "ai-manage.exe",
+//!     "ms-manage": {
+//!       "command": "ms_manage.exe",
 //!       "args": ["proxy", "stdio"]
 //!     }
 //!   }
@@ -227,7 +227,7 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ai-manage-proxy", "version": "0.1.0" }
+            "clientInfo": { "name": "ms-manage-proxy", "version": "0.1.0" }
         }
     });
     child_srv.stdin.write_all(format!("{}\n", init_req).as_bytes()).await?;
@@ -375,7 +375,7 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ai-manage-viewer", "version": "0.1.0" }
+            "clientInfo": { "name": "ms-manage-viewer", "version": "0.1.0" }
         }
     });
     stdin.write_all(format!("{}\n", init).as_bytes()).await.map_err(|e| format!("write init: {e}"))?;
@@ -453,7 +453,7 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ai-manage-test", "version": "0.1.0" }
+            "clientInfo": { "name": "ms-manage-test", "version": "0.1.0" }
         }
     });
     let _ = stdin.write_all(format!("{}\n", init).as_bytes()).await;
@@ -484,7 +484,7 @@ pub async fn run_stdio() -> anyhow::Result<()> {
 /// 启动 GUI 内的代理（HTTP 模式 tokio task）。
 ///
 /// 注意：stdio 模式不能从 GUI 启动（GUI 进程 stdin/stdout 被 WebView 占用），
-/// 需用 CLI：`ai-manage.exe proxy stdio`
+/// 需用 CLI：`ms_manage.exe proxy stdio`
 pub async fn start(_app: &AppHandle, _state: &Arc<crate::state::AppState>) -> anyhow::Result<()> {
     let st = match crate::state::try_current() {
         Some(s) => s,

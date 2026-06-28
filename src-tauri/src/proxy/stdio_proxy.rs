@@ -8,10 +8,10 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_INFO: &str = "ai-manage-proxy";
+const SERVER_INFO: &str = "ms-manage-proxy";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 入口：启动 stdio 代理（CLI 子命令 `ai-manage proxy stdio` 调用）
+/// 入口：启动 stdio 代理（CLI 子命令 `ms_manage proxy stdio` 调用）
 pub async fn run() -> anyhow::Result<()> {
     // 初始化 AppState（和 GUI 用同一个数据目录 + migration + settings）
     let state = crate::state::AppState::initialize()

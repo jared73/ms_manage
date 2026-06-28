@@ -38,7 +38,7 @@
 ## 📂 目录结构
 
 ```
-ai_manage/
+ms_manage/
 ├── src/                      # 前端 (React)
 │   ├── components/           # Layout, StatusBadge, Modal, Section
 │   ├── pages/                # Dashboard, Servers, Skills, ClaudeDesktop, Market, Logs, Settings
@@ -99,7 +99,7 @@ npm run build
 npm run tauri:build
 
 # 输出位置：
-#   src-tauri/target/release/ai-manage.exe          # 主程序（约 7MB）
+#   src-tauri/target/release/ms_manage.exe          # 主程序（约 7MB）
 #   src-tauri/target/release/bundle/nsis/AI Manage_0.1.0_x64-setup.exe
 ```
 

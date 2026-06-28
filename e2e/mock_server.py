@@ -1,4 +1,4 @@
-"""Minimal MCP server (stdio JSON-RPC) for E2E testing ai-manage proxy.
+"""Minimal MCP server (stdio JSON-RPC) for E2E testing ms-manage proxy.
 
 Implements:
 - initialize / notifications/initialized

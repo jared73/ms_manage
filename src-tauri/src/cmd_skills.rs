@@ -203,7 +203,7 @@ pub async fn import_skill_from_path(path: String, state: State<'_, Arc<AppState>
 fn extract_zip_to_temp(zip_path: &std::path::Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
     let file = std::fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
-    let tmp = std::env::temp_dir().join(format!("aimanage-import-{}", uuid::Uuid::new_v4()));
+    let tmp = std::env::temp_dir().join(format!("msmanage-import-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp)?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
@@ -228,7 +228,7 @@ fn extract_tar_gz_to_temp(tar_gz_path: &std::path::Path) -> anyhow::Result<Vec<s
     let file = std::fs::File::open(tar_gz_path)?;
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
-    let tmp = std::env::temp_dir().join(format!("aimanage-import-{}", uuid::Uuid::new_v4()));
+    let tmp = std::env::temp_dir().join(format!("msmanage-import-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp)?;
     archive.unpack(&tmp)?;
     Ok(vec![tmp])

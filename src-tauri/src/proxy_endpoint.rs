@@ -44,7 +44,7 @@ pub async fn get_router_config(state: State<'_, Arc<AppState>>) -> Result<serde_
         "token": token,
         "running": proxy_running,
         "mcpServers": {
-            "ai-manage": {
+            "ms-manage": {
                 "type": "http",
                 "url": url,
                 "headers": { "Authorization": format!("Bearer {token}") }

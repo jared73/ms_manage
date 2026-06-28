@@ -56,7 +56,7 @@ pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
         let token = token.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_conn(stream, state, token).await {
-                eprintln!("[ai-manage] conn error: {e}");
+                eprintln!("[ms-manage] conn error: {e}");
                 log("error", "proxy", format!("连接处理失败：{e}"), None);
             }
         });
@@ -184,7 +184,7 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token
         // 健康检查 + 根路径
         ("GET", "/") | ("GET", "/health") => {
             let _ = write_all(&mut write,
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ai-manage\",\"version\":\"0.1.0\"}"
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ms-manage\",\"version\":\"0.1.0\"}"
             ).await;
         }
         // CORS preflight
@@ -271,7 +271,7 @@ async fn handle_jsonrpc_to_string(state: &AppState, body: &str) -> anyhow::Resul
             "result": {
                 "protocolVersion": "2025-03-26",
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+                "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
             }
         })),
         "ping" => Some(jsonrpc_ok(id, serde_json::json!({}))),
@@ -341,7 +341,7 @@ async fn handle_jsonrpc<W: tokio::io::AsyncWrite + Unpin>(
             "result": {
                 "protocolVersion": "2025-03-26",
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "ai-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+                "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
             }
         })),
         "ping" => Some(jsonrpc_ok(id.clone(), serde_json::json!({}))),
