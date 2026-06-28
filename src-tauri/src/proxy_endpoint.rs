@@ -50,7 +50,7 @@ pub async fn get_router_config(state: State<'_, Arc<AppState>>) -> Result<serde_
                 "headers": { "Authorization": format!("Bearer {token}") }
             }
         },
-        "instructions": "Copy the mcpServers object into your MCP client's config. For Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json. For Claude Code: ~/.claude/mcp_servers.json. For Cursor: ~/.cursor/mcp.json. Then restart the client. Make sure the AI Manage HTTP service is running first (click 'Start' on this page)."
+        "instructions": "Copy the mcpServers object into your MCP client's config. For Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json. For Claude Code: ~/.claude/mcp_servers.json. For Cursor: ~/.cursor/mcp.json. Then restart the client. Make sure the MS Manage HTTP service is running first (click 'Start' on this page)."
     }))
 }
 
