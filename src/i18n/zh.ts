@@ -7,7 +7,7 @@ export default {
     dashboard: "概览",
     servers: "MCP 服务",
     skills: "Skill",
-    claude: "客户端接入",
+    connections: "客户端接入",
     market: "市场",
     logs: "日志",
     settings: "设置",
@@ -75,6 +75,7 @@ export default {
     stats: {
       servers_total: "MCP 服务总数",
       servers_running: "运行中",
+      tools_total: "工具总数",
       skills_total: "Skill 总数",
       skills_enabled: "Skill 已启用",
       requests_today: "今日请求",

@@ -68,3 +68,94 @@ pub async fn stop_proxy(_state: State<'_, Arc<AppState>>) -> Result<(), String> 
     crate::proxy::stop_all().await;
     Ok(())
 }
+
+/// Dashboard 统计：所有 running server 的 tool 总数累加
+#[tauri::command]
+pub async fn get_tools_total(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let reg = crate::proxy::registry();
+    let ids = reg.list_ids().await;
+    let mut total = 0usize;
+    for id in ids {
+        if let Some(child) = reg.get(&id).await {
+            let srv = child.lock().await;
+            total += srv.tools.len();
+        }
+    }
+    let _ = state;
+    Ok(total)
+}
+
+/// 写一条日志（GUI 端"日志"页可见）
+#[tauri::command]
+pub fn log_event(
+    level: String,
+    source: String,
+    message: String,
+    detail: Option<String>,
+    state: State<'_, Arc<crate::state::AppState>>,
+) {
+    let _ = state;
+    use crate::storage::LogRecord;
+    let log = LogRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level,
+        source,
+        message,
+        detail,
+    };
+    if let Some(app_state) = crate::state::try_current() {
+        let mut logs = app_state.storage.logs.write();
+        logs.push(log);
+        // 超过 5000 条丢最老的
+        if logs.len() > 5000 {
+            let drop = logs.len() - 5000;
+            logs.drain(0..drop);
+        }
+    }
+}
+
+/// Dashboard 用：聚合所有 running server 的 tool 列表（每个带 server 前缀），
+/// 让用户在概览页就能看到"Qoder 现在能调哪些 tool"。
+/// 注意：会按 server.disabled_tools 过滤，跟 proxy::http_tools_list 行为一致。
+#[tauri::command]
+pub async fn get_exposed_tools(state: State<'_, Arc<AppState>>) -> Result<Vec<serde_json::Value>, String> {
+    let _ = state;
+    let reg = crate::proxy::registry();
+    let ids = reg.list_ids().await;
+
+    // 读 servers.json 拿到每个 server 的 disabled_tools
+    let servers = crate::state::AppState::initialize()
+        .ok()
+        .and_then(|s| s.storage.load_servers().ok())
+        .unwrap_or_default();
+    let disabled_map: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        servers.into_iter()
+            .map(|s| (s.id, s.disabled_tools.into_iter().collect()))
+            .collect();
+
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for id in ids {
+        let disabled = disabled_map.get(&id).cloned().unwrap_or_default();
+        if let Some(child) = reg.get(&id).await {
+            let srv = child.lock().await;
+            for tool in &srv.tools {
+                let orig_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                if disabled.contains(orig_name.as_str()) {
+                    continue;  // 用户在 GUI 里关过的，过滤掉
+                }
+                let mut t = tool.clone();
+                if let Some(obj) = t.as_object_mut() {
+                    let desc = obj.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                    obj.insert("name".into(), serde_json::Value::String(format!("{}__{}", srv.name, orig_name)));
+                    if let Some(d) = desc {
+                        obj.insert("description".into(), serde_json::Value::String(d));
+                    }
+                    obj.insert("__server".into(), serde_json::Value::String(srv.name.clone()));
+                }
+                out.push(t);
+            }
+        }
+    }
+    Ok(out)
+}

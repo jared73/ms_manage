@@ -77,6 +77,24 @@ pub fn update_settings(
     state.storage.save_settings(&stored).map_err(|e| e.to_string())
 }
 
+/// 开机自启动开关
+#[tauri::command]
+pub fn get_auto_launch(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_auto_launch(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if enabled {
+        mgr.enable().map_err(|e| e.to_string())
+    } else {
+        mgr.disable().map_err(|e| e.to_string())
+    }
+}
+
 /// 重新生成 MCPR_TOKEN（用户想要换 token 的时候用）。
 /// 注意：换了之后所有正在用旧 token 连的客户端会立刻 401，
 /// 需要把新 token 重新写到它们的 mcpServers 配置里。

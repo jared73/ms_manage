@@ -165,6 +165,16 @@ export const getRouterConfig = () => invoke<{
   mcpServers: Record<string, unknown>;
   instructions: string;
 }>("get_router_config");
+export const getToolsTotal = () => invoke<number>("get_tools_total");
+export const getExposedTools = () => invoke<{ name: string; description?: string; __server: string }[]>("get_exposed_tools");
+
+// 写一条日志（用户/前端想记事件时用）
+export const logEvent = (
+  level: "info" | "warn" | "error" | "debug",
+  source: string,
+  message: string,
+  detail?: string,
+) => invoke<void>("log_event", { level, source, message, detail });
 export const startProxy = () => invoke<ProxyStatus>("start_proxy");
 export const stopProxy = () => invoke<void>("stop_proxy");
 
@@ -181,6 +191,9 @@ export const clearLogs = () => invoke<void>("clear_logs");
 export const getSettings = () => invoke<AppSettings>("get_settings");
 export const updateSettings = (settings: AppSettings) => invoke<void>("update_settings", { settings });
 export const regenerateToken = () => invoke<string>("regenerate_token");
+
+export const getAutoLaunch = () => invoke<boolean>("get_auto_launch");
+export const setAutoLaunch = (enabled: boolean) => invoke<void>("set_auto_launch", { enabled });
 
 // ---- App info ----
 export const appInfo = () => invoke<{ version: string; data_dir: string; log_dir: string; app_dir: string }>("app_info");

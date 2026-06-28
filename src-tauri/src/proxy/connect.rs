@@ -14,6 +14,27 @@ use crate::proxy::registry;
 use crate::state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use crate::storage::LogRecord;
+
+/// 写一条日志到 AppState.logs（GUI "日志" 页可见）
+fn log(level: &str, source: &str, message: String, detail: Option<String>) {
+    let log = LogRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level: level.to_string(),
+        source: source.to_string(),
+        message,
+        detail,
+    };
+    if let Some(state) = crate::state::try_current() {
+        let mut logs = state.storage.logs.write();
+        logs.push(log);
+        if logs.len() > 5000 {
+            let drop = logs.len() - 5000;
+            logs.drain(0..drop);
+        }
+    }
+}
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -27,6 +48,7 @@ pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
     let local = listener.local_addr().ok();
     eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?} (also reachable via 127.0.0.1:{port})");
     eprintln!("[ms-manage] token (Authorization: Bearer ...): {token}");
+    log("info", "proxy", format!("HTTP MCP proxy listening on 0.0.0.0:{port}"), None);
 
     loop {
         let (stream, _peer) = listener.accept().await?;
@@ -35,6 +57,7 @@ pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
         tokio::spawn(async move {
             if let Err(e) = handle_conn(stream, state, token).await {
                 eprintln!("[ai-manage] conn error: {e}");
+                log("error", "proxy", format!("连接处理失败：{e}"), None);
             }
         });
     }
@@ -109,6 +132,7 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token
         let p = parts.next().unwrap_or("").to_string();
         (m, p)
     };
+    log("debug", "proxy.http", format!("{} {}", method, path), None);
 
     // 记录请求路径（调试用）
     eprintln!("[proxy] {} {} (auth={})", method, path,
@@ -181,10 +205,12 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token
             let _ = tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await;
             let body_str = String::from_utf8_lossy(&body).to_string();
             eprintln!("[proxy] unknown POST path {}, treating as /mcp", path);
+            log("warn", "proxy.http", format!("未知 POST 路径 {}, 当 /mcp 处理", path), Some(body_str.chars().take(200).collect::<String>()));
             handle_jsonrpc(&state, &body_str, &mut write).await?;
         }
         _ => {
             eprintln!("[proxy] unknown {} {}, returning 405", method, path);
+            log("warn", "proxy.http", format!("未知 {} {}, 返回 405", method, path), None);
             let _ = write_all(&mut write,
                 b"HTTP/1.1 405 Method Not Allowed\r\nAccess-Control-Allow-Origin: *\r\nAllow: GET, POST, OPTIONS\r\nContent-Length: 0\r\n\r\n"
             ).await;

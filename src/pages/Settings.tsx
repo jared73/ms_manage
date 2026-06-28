@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, FolderOpen, RefreshCw } from "lucide-react";
+import { Save, FolderOpen, RefreshCw, Power } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken } from "@/lib/ipc";
+import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, getAutoLaunch, setAutoLaunch } from "@/lib/ipc";
 import type { AppSettings } from "@/lib/ipc";
 import { useApp } from "@/stores/app";
 
@@ -13,13 +13,30 @@ export function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   const [saved, setSaved] = useState(false);
+  const [autoLaunch, setAutoLaunchState] = useState(false);
 
   useEffect(() => {
     void (async () => {
       setSettings(await getSettings());
       setInfo(await appInfo());
+      try {
+        setAutoLaunchState(await getAutoLaunch());
+      } catch (e) {
+        // autostart 不一定可用，ignore
+        console.warn("getAutoLaunch failed:", e);
+      }
     })();
   }, []);
+
+  const handleAutoLaunch = async (next: boolean) => {
+    try {
+      await setAutoLaunch(next);
+      setAutoLaunchState(next);
+      toast.success(next ? "已开启开机自启" : "已关闭开机自启", { duration: 1500 });
+    } catch (e) {
+      toast.error(`设置失败: ${e}`);
+    }
+  };
 
   const save = async () => {
     if (!settings) return;
@@ -55,9 +72,6 @@ export function Settings() {
               <option value="zh">中文</option>
               <option value="en">English</option>
             </select>
-          </Row>
-          <Row label={t("settings.auto_launch")}>
-            <input type="checkbox" checked={settings.auto_launch} onChange={(e) => setSettings({ ...settings, auto_launch: e.target.checked })} />
           </Row>
           <Row label={t("settings.logs_max_entries")}>
             <input type="number" className="input max-w-[160px]" value={settings.logs_max_entries}
@@ -122,6 +136,30 @@ export function Settings() {
               onChange={(e) => setSettings({ ...settings, registry_url: e.target.value || undefined })}
               placeholder="https://registry.npmmirror.com/-/v1/search?text=keyword:mcp" />
           </Row>
+        </div>
+
+        {/* 开机自启动 */}
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Power size={16} className="text-accent" />
+              <div>
+                <div className="text-sm font-medium">开机自启</div>
+                <div className="text-xs text-fg-muted">
+                  系统启动时自动打开 MS Manage（窗口最小化到托盘）
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => handleAutoLaunch(!autoLaunch)}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${autoLaunch ? "bg-accent" : "bg-white/10"}`}
+              title={autoLaunch ? "已启用，点此关闭" : "已关闭，点此启用"}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${autoLaunch ? "left-5" : "left-0.5"}`}
+              />
+            </button>
+          </div>
         </div>
 
         {/* About */}

@@ -18,7 +18,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="/servers" element={<Servers />} />
           <Route path="/skills" element={<Skills />} />
-          <Route path="/claude" element={<Connections />} />
+          <Route path="/connections" element={<Connections />} />
           <Route path="/market" element={<Market />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />

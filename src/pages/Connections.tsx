@@ -1,124 +1,127 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
-import { Terminal, Copy, RefreshCw } from "lucide-react";
+import { Copy, RefreshCw, Plug, FileCode } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, appInfo } from "@/lib/ipc";
+import { getSettings, getRouterConfig, appInfo, getProxyStatus } from "@/lib/ipc";
 import type { AppSettings } from "@/lib/ipc";
 
+type RouterConfig = Awaited<ReturnType<typeof getRouterConfig>>;
+type ProxyStatus = Awaited<ReturnType<typeof getProxyStatus>>;
+
 export function Connections() {
-  const { t } = useTranslation();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [info, setInfo] = useState<{ data_dir: string } | null>(null);
+  const [routerConfig, setRouterConfig] = useState<RouterConfig | null>(null);
+  const [proxy, setProxy] = useState<ProxyStatus | null>(null);
+  const [copied, setCopied] = useState<string>("");
 
-  useEffect(() => {
-    void (async () => {
-      setSettings(await getSettings());
-      setInfo(await appInfo());
-    })();
-  }, []);
+  const load = async () => {
+    setSettings(await getSettings());
+    setInfo(await appInfo());
+    setRouterConfig(await getRouterConfig().catch(() => null));
+    setProxy(await getProxyStatus().catch(() => null));
+  };
+
+  useEffect(() => { void load(); }, []);
 
   const httpEndpoint = settings ? `http://127.0.0.1:${settings.proxy_http_port}/mcp` : "";
   const token = settings?.mcp_token ?? "";
 
-  // 复制 + toast 提示，label 是给用户看的具体复制了啥
-  const copy = (text: string, label: string) => {
+  const copy = (text: string, key: string, label: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text);
+    setCopied(key);
     toast.success(`已复制 ${label}`, { duration: 1500 });
+    setTimeout(() => setCopied(""), 1500);
   };
 
-  // 一键复制 mcpServers JSON 片段（给 HTTP-capable 客户端粘贴用）
-  const copyMcpServersSnippet = () => {
-    if (!settings) return;
-    const snippet = JSON.stringify({
-      mcpServers: {
-        "ms-manage": {
-          type: "http",
-          url: httpEndpoint,
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      },
-    }, null, 2);
-    copy(snippet, "mcpServers JSON");
-  };
+  // 给"已处理请求/最近请求"等数据用的简易访问
+  void proxy;
 
   return (
     <div className="space-y-4 p-6">
+      {/* MCP Router 服务卡片（学 mcp-router）—— 之前在 Dashboard，现在统一搬到这里 */}
       <Section
-        title="客户端接入"
-        action={<button className="btn-ghost" onClick={() => location.reload()}><RefreshCw size={14}/>刷新</button>}
+        title="MCP Router 服务"
+        action={
+          <div className="flex gap-2">
+            <button className="btn-ghost" onClick={load}><RefreshCw size={14}/>刷新</button>
+            <button className="btn-primary" onClick={() => (window.location.href = "/")}>回到概览 →</button>
+          </div>
+        }
       >
-        {/* HTTP 端点 + token —— 任何支持 mcpServers 的客户端都能用 */}
         <div className="card space-y-3">
-          <div className="flex items-center gap-2">
-            <Terminal size={16} className="text-accent" />
-            <h3 className="font-semibold">HTTP 代理</h3>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-lg bg-ok/15 text-ok">
+                <Plug size={20} />
+              </div>
+              <div>
+                <div className="font-semibold">MCP Router 服务</div>
+                <div className="text-xs text-fg-muted">
+                  {routerConfig?.running
+                    ? <>运行中 · endpoint <code className="text-fg">{routerConfig.endpoint}</code></>
+                    : "未运行（启动失败请看日志，关掉重开 GUI 会自动重试）"}
+                </div>
+              </div>
+            </div>
+            {/* 启动/停止按钮已移除 —— 跟 mcp-router 一样，代理跟 GUI 生命周期绑定 */}
           </div>
-          <p className="text-xs text-fg-muted">
-            GUI 启动后会自动 listen <code className="text-fg">{httpEndpoint}</code>。
-            任何支持 mcpServers + http transport 的客户端（Claude Code / Cursor / Cline / Windsurf / VS Code / Qoder 等）都能连。
-          </p>
 
-          <div className="rounded-md border border-white/10 bg-bg-subtle p-3 space-y-2">
-            <FieldRow label="HTTP 端点" value={httpEndpoint} onCopy={() => copy(httpEndpoint, "HTTP 端点")} />
-            <FieldRow label="Auth token" value={token} onCopy={() => copy(token, "Auth token")} />
-            <FieldRow
-              label="mcpServers 片段"
-              value={`<点右侧复制按钮，粘贴到任意客户端配置>`}
-              onCopy={copyMcpServersSnippet}
-              buttonLabel="复制 JSON"
-            />
-          </div>
+          {routerConfig && (
+            <div className="space-y-2 rounded-md bg-bg-subtle p-3">
+              <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+                <div>
+                  <span className="text-fg-muted">HTTP endpoint：</span>
+                  <code className="text-fg">{routerConfig.endpoint}</code>
+                </div>
+                <div>
+                  <span className="text-fg-muted">Token：</span>
+                  <code className="text-fg break-all">{routerConfig.token}</code>
+                  <button
+                    className="btn-ghost ml-2 px-2 py-0.5 text-[11px]"
+                    onClick={() => copy(routerConfig.token, "token", "token")}
+                  >
+                    {copied === "token" ? "✓" : <Copy size={10}/>}
+                  </button>
+                </div>
+                <div>
+                  <span className="text-fg-muted">已处理请求：</span>
+                  <span className="text-fg">{proxy?.total_requests ?? 0}</span>
+                </div>
+                <div>
+                  <span className="text-fg-muted">最近请求：</span>
+                  <span className="text-fg">{proxy?.last_request_at ? new Date(proxy.last_request_at).toLocaleTimeString() : "—"}</span>
+                </div>
+              </div>
+
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-fg-muted">
+                  <span className="flex items-center gap-1"><FileCode size={11}/>mcpServers JSON（直接给客户端用）</span>
+                  <button
+                    className="btn-ghost px-2 py-0.5 text-[11px]"
+                    onClick={() => copy(JSON.stringify({ mcpServers: routerConfig.mcpServers }, null, 2), "json", "mcpServers JSON")}
+                  >
+                    {copied === "json" ? "✓ 已复制" : <><Copy size={10}/>复制</>}
+                  </button>
+                </div>
+                <pre className="max-h-40 overflow-auto rounded bg-bg p-3 text-[11px] leading-relaxed">
+{JSON.stringify({ mcpServers: routerConfig.mcpServers }, null, 2)}
+                </pre>
+                <div className="mt-2 text-[11px] text-fg-muted">
+                  {routerConfig.instructions}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-
-        {/* 各客户端一行命令接入（CLI 模式） */}
-        <div className="card space-y-3">
-          <h3 className="font-semibold flex items-center gap-2"><Terminal size={16}/>一行命令接入</h3>
-          <p className="text-xs text-fg-muted">
-            通过 stdio 模式把 MS Manage 作为 MCP server 直接 spawn 进客户端。需要在 PATH 里能找到 <code className="text-fg">ms_manage.exe</code>。
-          </p>
-          <div className="space-y-2">
-            <CmdRow label="启动代理"   cmd={`ms_manage proxy http --port ${settings?.proxy_http_port ?? 39231}`} onCopy={(c) => copy(c, "启动代理命令")} />
-            <CmdRow label="Claude Code" cmd={`ms_manage connect claude-code`} onCopy={(c) => copy(c, "Claude Code 命令")} />
-            <CmdRow label="Cursor"      cmd={`ms_manage connect cursor`} onCopy={(c) => copy(c, "Cursor 命令")} />
-            <CmdRow label="Windsurf"    cmd={`ms_manage connect windsurf`} onCopy={(c) => copy(c, "Windsurf 命令")} />
-            <CmdRow label="VS Code"     cmd={`ms_manage connect vscode`} onCopy={(c) => copy(c, "VS Code 命令")} />
-            <CmdRow label="Qoder"       cmd={`ms_manage connect qoder`} onCopy={(c) => copy(c, "Qoder 命令")} />
-          </div>
-        </div>
-
-        {info?.data_dir && (
-          <div className="text-xs text-fg-muted">
-            数据目录：<code className="text-fg">{info.data_dir}</code>
-          </div>
-        )}
       </Section>
-    </div>
-  );
-}
 
-function FieldRow({ label, value, onCopy, buttonLabel }: { label: string; value: string; onCopy: () => void; buttonLabel?: string }) {
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-fg-muted shrink-0 w-28">{label}</span>
-      <code className="flex-1 truncate">{value}</code>
-      <button className="btn-ghost p-1.5" onClick={onCopy} title="复制">
-        <Copy size={12}/>
-        {buttonLabel && <span className="ml-1 text-[11px]">{buttonLabel}</span>}
-      </button>
-    </div>
-  );
-}
-
-function CmdRow({ label, cmd, onCopy }: { label: string; cmd: string; onCopy: (c: string) => void }) {
-  return (
-    <div className="flex items-center gap-2 rounded-md bg-bg-subtle px-3 py-2">
-      <div className="w-24 text-xs text-fg-muted">{label}</div>
-      <code className="flex-1 truncate text-sm">{cmd}</code>
-      <button className="btn-ghost p-1.5" onClick={() => onCopy(cmd)} title="复制">
-        <Copy size={14}/>
-      </button>
+      {info?.data_dir && (
+        <div className="text-xs text-fg-muted">
+          数据目录：<code className="text-fg">{info.data_dir}</code>
+        </div>
+      )}
     </div>
   );
 }

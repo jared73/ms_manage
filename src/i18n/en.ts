@@ -1,6 +1,6 @@
 export default {
   app: { title: "MS Manage", tagline: "Unified MCP & Skill Manager" },
-  nav: { dashboard: "Overview", servers: "MCP Servers", skills: "Skills", claude: "Connections", market: "Market", logs: "Logs", settings: "Settings" },
+  nav: { dashboard: "Overview", servers: "MCP Servers", skills: "Skills", connections: "Connections", market: "Market", logs: "Logs", settings: "Settings" },
   common: {
     add: "Add", edit: "Edit", delete: "Delete", save: "Save", cancel: "Cancel", confirm: "Confirm",
     refresh: "Refresh", search: "Search", start: "Start", stop: "Stop", restart: "Restart", test: "Test",
@@ -25,7 +25,7 @@ export default {
     proxy_endpoint: "Proxy Endpoint",
     stats: {
       servers_total: "Total MCP Servers", servers_running: "Running",
-      skills_total: "Total Skills", skills_enabled: "Enabled Skills",
+      skills_total: "Total Skills", skills_enabled: "Enabled Skills", tools_total: "Total Tools",
       requests_today: "Requests today",
     },
     quick_start: {

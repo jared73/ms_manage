@@ -1,6 +1,6 @@
 import { Outlet, NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LayoutDashboard, Server, Sparkles, MonitorSmartphone, Store, ScrollText, Settings as Cog } from "lucide-react";
+import { LayoutDashboard, Server, Sparkles, MonitorSmartphone, Store, ScrollText, Settings as Cog, Plug } from "lucide-react";
 import { clsx } from "clsx";
 
 interface NavItem {
@@ -14,7 +14,7 @@ const items: NavItem[] = [
   { to: "/",         key: "dashboard", icon: LayoutDashboard, end: true },
   { to: "/servers",  key: "servers",   icon: Server },
   { to: "/skills",   key: "skills",    icon: Sparkles },
-  { to: "/claude",   key: "claude",    icon: MonitorSmartphone },
+  { to: "/connections", key: "connections", icon: Plug },
   { to: "/market",   key: "market",    icon: Store },
   { to: "/logs",     key: "logs",      icon: ScrollText },
   { to: "/settings", key: "settings",  icon: Cog },

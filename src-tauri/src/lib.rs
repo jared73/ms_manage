@@ -50,6 +50,10 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(state.clone())
         .setup(move |app| {
             // 跟 mcp-router 一样：GUI 起来 = 代理起来，关 GUI = 代理死。
@@ -158,10 +162,15 @@ pub fn run() {
             cmd_settings::get_settings,
             cmd_settings::update_settings,
             cmd_settings::regenerate_token,
+            cmd_settings::get_auto_launch,
+            cmd_settings::set_auto_launch,
             proxy_endpoint::get_proxy_status,
             proxy_endpoint::get_router_config,
             proxy_endpoint::start_proxy,
             proxy_endpoint::stop_proxy,
+            proxy_endpoint::get_tools_total,
+            proxy_endpoint::get_exposed_tools,
+            proxy_endpoint::log_event,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MS Manage")
