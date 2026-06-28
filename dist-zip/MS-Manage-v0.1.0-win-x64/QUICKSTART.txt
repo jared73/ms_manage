@@ -1,0 +1,26 @@
+MS Manage v0.1.0 - Windows 绿色版
+
+【1】解压到任意目录（路径最好不含中文 / 空格）
+
+【2】运行 GUI
+  双击 ms_manage.exe
+  （首次启动会自动 listen 127.0.0.1:39231，HTTP MCP 代理 + 自动同步 skill）
+
+【3】接入 AI 客户端
+  GUI 右上角 "客户端接入" 页有 HTTP 接入指引 + 一键复制 mcpServers JSON
+  把 JSON 粘到 Claude Code / Cursor / Qoder 等客户端配置里即可
+
+【4】CLI 用法（PATH 里能找到 ms_manage.exe 后）
+  ms_manage                       启动 GUI
+  ms_manage serve                  启动 stdio MCP server
+  ms_manage proxy http --port 39231  启动 HTTP MCP 代理
+  ms_manage connect qoder          一键写 Qoder 的 mcp.json
+  ms_manage help                   查看全部命令
+
+【5】数据目录（应用首次启动会自动迁移旧 ai-manage 数据）
+  %LOCALAPPDATA%\ms-manage\
+  - settings.json
+  - servers.json
+  - skills\        (每个 skill 一个子目录)
+  - logs\
+  - ai-manage.pid  (单实例守卫的 PID 文件，名字保留是兼容写法)

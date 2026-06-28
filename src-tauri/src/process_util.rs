@@ -13,21 +13,10 @@ pub fn apply_no_window(cmd: &mut tokio::process::Command) {
 #[cfg(not(windows))]
 pub fn apply_no_window(_cmd: &mut tokio::process::Command) {}
 
-/// 是否需要走 cmd.exe /c 包装（.cmd / .bat / .ps1）
-#[cfg(windows)]
-pub fn needs_cmd_wrapper(path: &std::path::Path) -> bool {
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-        matches!(ext.to_ascii_lowercase().as_str(), "cmd" | "bat" | "ps1")
-    } else {
-        false
-    }
-}
-#[cfg(not(windows))]
-pub fn needs_cmd_wrapper(_path: &std::path::Path) -> bool { false }
+use std::path::PathBuf;
 
 /// PATH 解析：`npx` → `C:\...\npx.cmd`
-pub fn resolve_cmd(name: &str) -> std::path::PathBuf {
-    use std::path::PathBuf;
+pub fn resolve_cmd(name: &str) -> PathBuf {
     let p = PathBuf::from(name);
     if p.is_absolute() { return p; }
     if p.extension().is_some() { return p; }
@@ -52,10 +41,9 @@ pub fn resolve_cmd(name: &str) -> std::path::PathBuf {
     p
 }
 
-/// 把 `uvx <pkg>` 包装成直接 spawn `%LOCALAPPDATA%\uv\cache\archive-v0\<hash>\Scripts\<pkg>.exe`
-/// （uvx 内部 spawn conhost.exe 一定闪黑窗，绕开它）
+/// uvx 缓存绕过
 #[cfg(windows)]
-pub fn resolve_uvx_cached_exe(package: &str) -> Option<std::path::PathBuf> {
+pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
     let cache_root = dirs::data_local_dir()?.join("uv").join("cache").join("archive-v0");
     if !cache_root.is_dir() { return None; }
     let Ok(entries) = std::fs::read_dir(&cache_root) else { return None; };
@@ -67,9 +55,9 @@ pub fn resolve_uvx_cached_exe(package: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// 把 uvx 命令展开成直接 exe
+/// 把 uvx 类型的命令绕过到缓存的真 exe
 #[cfg(windows)]
-pub fn resolve_spawn_command(cmd: &std::path::Path, args: &[String]) -> (std::path::PathBuf, Vec<String>) {
+pub fn resolve_spawn_command(cmd: &PathBuf, args: &[String]) -> (PathBuf, Vec<String>) {
     if let Some(name) = cmd.file_stem().and_then(|s| s.to_str()) {
         if name.eq_ignore_ascii_case("uvx") && !args.is_empty() {
             if let Some(cached) = resolve_uvx_cached_exe(&args[0]) {
@@ -79,5 +67,17 @@ pub fn resolve_spawn_command(cmd: &std::path::Path, args: &[String]) -> (std::pa
             }
         }
     }
-    (cmd.to_path_buf(), args.to_vec())
+    (cmd.clone(), args.to_vec())
 }
+
+/// .cmd/.bat/.ps1 文件需要特殊处理
+#[cfg(windows)]
+pub fn is_batch_script(path: &PathBuf) -> bool {
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        matches!(ext.to_ascii_lowercase().as_str(), "cmd" | "bat" | "ps1")
+    } else {
+        false
+    }
+}
+#[cfg(not(windows))]
+pub fn is_batch_script(_path: &PathBuf) -> bool { false }
