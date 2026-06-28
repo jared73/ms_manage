@@ -13,6 +13,18 @@ pub fn apply_no_window(cmd: &mut tokio::process::Command) {
 #[cfg(not(windows))]
 pub fn apply_no_window(_cmd: &mut tokio::process::Command) {}
 
+/// 是否需要走 cmd.exe /c 包装（.cmd / .bat / .ps1）
+#[cfg(windows)]
+pub fn needs_cmd_wrapper(path: &std::path::Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+        matches!(ext.to_ascii_lowercase().as_str(), "cmd" | "bat" | "ps1")
+    } else {
+        false
+    }
+}
+#[cfg(not(windows))]
+pub fn needs_cmd_wrapper(_path: &std::path::Path) -> bool { false }
+
 /// PATH 解析：`npx` → `C:\...\npx.cmd`
 pub fn resolve_cmd(name: &str) -> std::path::PathBuf {
     use std::path::PathBuf;

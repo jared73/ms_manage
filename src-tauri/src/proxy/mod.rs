@@ -164,8 +164,16 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &srv.args);
 
-    let mut c = Command::new(&final_cmd);
-    c.args(final_args.iter());
+    let mut c = if crate::process_util::needs_cmd_wrapper(&final_cmd) {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/c").arg("start").arg("/MIN").arg(&final_cmd);
+        c.args(final_args.iter());
+        c
+    } else {
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     if let Some(cwd) = &srv.cwd { c.current_dir(cwd); }
     for (k, v) in &srv.env { c.env(k, v); }
     inject_npm_registry(&mut c);
@@ -310,8 +318,16 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
         .ok_or_else(|| "command is empty".to_string())?;
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
-    let mut command = Command::new(&final_cmd);
-    command.args(final_args.iter());
+    let mut command = if crate::process_util::needs_cmd_wrapper(&final_cmd) {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/c").arg("start").arg("/MIN").arg(&final_cmd);
+        c.args(final_args.iter());
+        c
+    } else {
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     if let Some(cwd) = &s.cwd { command.current_dir(cwd); }
     for (k, v) in &s.env { command.env(k, v); }
     inject_npm_registry(&mut command);
@@ -366,8 +382,16 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let started = std::time::Instant::now();
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
-    let mut command = Command::new(&final_cmd);
-    command.args(final_args.iter());
+    let mut command = if crate::process_util::needs_cmd_wrapper(&final_cmd) {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/c").arg("start").arg("/MIN").arg(&final_cmd);
+        c.args(final_args.iter());
+        c
+    } else {
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut command);
