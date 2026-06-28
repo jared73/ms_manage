@@ -164,8 +164,33 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &srv.args);
 
-    let mut c = Command::new(&final_cmd);
-    c.args(final_args.iter());
+    // .cmd/.bat 直接解析成真实 .exe + .js 脚本（彻底绕过 cmd.exe，不闪窗）
+    let mut c = if cfg!(windows) && final_cmd.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .map_or(false, |e| e == "cmd" || e == "bat")
+    {
+        // 解析 npx.cmd → (node.exe, [npx-cli.js])
+        match crate::process_util::parse_cmd_file(&final_cmd) {
+            Some((real_exe, mut extra_args)) => {
+                extra_args.extend(final_args.iter().cloned());
+                let mut c = Command::new(&real_exe);
+                c.args(extra_args.iter());
+                c
+            }
+            None => {
+                // 解析失败（不是 npx/npm .cmd），fallback 到 cmd.exe /c
+                let mut c = Command::new("cmd.exe");
+                c.arg("/c").arg(&final_cmd);
+                c.args(final_args.iter());
+                c
+            }
+        }
+    } else {
+        // .exe 直接 spawn
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     if let Some(cwd) = &srv.cwd { c.current_dir(cwd); }
     for (k, v) in &srv.env { c.env(k, v); }
     inject_npm_registry(&mut c);
@@ -310,8 +335,30 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
         .ok_or_else(|| "command is empty".to_string())?;
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
-    let mut command = Command::new(&final_cmd);
-    command.args(final_args.iter());
+    // .cmd/.bat 直接解析成真实 .exe（彻底绕过 cmd.exe，不闪窗）
+    let mut command = if cfg!(windows) && final_cmd.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .map_or(false, |e| e == "cmd" || e == "bat")
+    {
+        match crate::process_util::parse_cmd_file(&final_cmd) {
+            Some((real_exe, mut extra_args)) => {
+                extra_args.extend(final_args.iter().cloned());
+                let mut c = Command::new(&real_exe);
+                c.args(extra_args.iter());
+                c
+            }
+            None => {
+                let mut c = Command::new("cmd.exe");
+                c.arg("/c").arg(&final_cmd);
+                c.args(final_args.iter());
+                c
+            }
+        }
+    } else {
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     if let Some(cwd) = &s.cwd { command.current_dir(cwd); }
     for (k, v) in &s.env { command.env(k, v); }
     inject_npm_registry(&mut command);
@@ -366,8 +413,30 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     let resolved = crate::process_util::resolve_cmd(cmd_str);
     let started = std::time::Instant::now();
     let (final_cmd, final_args) = crate::process_util::resolve_spawn_command(&resolved, &s.args);
-    let mut command = Command::new(&final_cmd);
-    command.args(final_args.iter());
+    // .cmd/.bat 直接解析成真实 .exe（彻底绕过 cmd.exe，不闪窗）
+    let mut command = if cfg!(windows) && final_cmd.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .map_or(false, |e| e == "cmd" || e == "bat")
+    {
+        match crate::process_util::parse_cmd_file(&final_cmd) {
+            Some((real_exe, mut extra_args)) => {
+                extra_args.extend(final_args.iter().cloned());
+                let mut c = Command::new(&real_exe);
+                c.args(extra_args.iter());
+                c
+            }
+            None => {
+                let mut c = Command::new("cmd.exe");
+                c.arg("/c").arg(&final_cmd);
+                c.args(final_args.iter());
+                c
+            }
+        }
+    } else {
+        let mut c = Command::new(&final_cmd);
+        c.args(final_args.iter());
+        c
+    };
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut command);

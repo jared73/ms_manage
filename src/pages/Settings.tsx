@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Save, FolderOpen, RefreshCw, Power } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, getAutoLaunch, setAutoLaunch } from "@/lib/ipc";
+import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, enableAutostart, disableAutostart, isAutostartEnabled } from "@/lib/ipc";
 import type { AppSettings } from "@/lib/ipc";
 import { useApp } from "@/stores/app";
 
@@ -19,18 +19,13 @@ export function Settings() {
     void (async () => {
       setSettings(await getSettings());
       setInfo(await appInfo());
-      try {
-        setAutoLaunchState(await getAutoLaunch());
-      } catch (e) {
-        // autostart 不一定可用，ignore
-        console.warn("getAutoLaunch failed:", e);
-      }
+      setAutoLaunchState(await isAutostartEnabled().catch(() => false));
     })();
   }, []);
 
   const handleAutoLaunch = async (next: boolean) => {
     try {
-      await setAutoLaunch(next);
+      if (next) { await enableAutostart(); } else { await disableAutostart(); }
       setAutoLaunchState(next);
       toast.success(next ? "已开启开机自启" : "已关闭开机自启", { duration: 1500 });
     } catch (e) {

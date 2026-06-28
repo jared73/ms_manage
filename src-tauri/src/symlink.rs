@@ -7,6 +7,8 @@
 
 use std::path::Path;
 use thiserror::Error;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Error)]
 pub enum SymlinkError {
@@ -30,6 +32,7 @@ pub fn create_dir_link(link: &Path, target: &Path) -> Result<(), SymlinkError> {
         let target_s = target.to_string_lossy().to_string();
         let out = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J", &link_s, &target_s])
+            .creation_flags(0x0800_0000)  // CREATE_NO_WINDOW — 防止 mklink 弹黑窗
             .output()?;
         if !out.status.success() {
             return Err(SymlinkError::Cmd(

@@ -193,6 +193,9 @@ export const clearLogs = () => invoke<void>("clear_logs");
 export const getSettings = () => invoke<AppSettings>("get_settings");
 export const updateSettings = (settings: AppSettings) => invoke<void>("update_settings", { settings });
 export const regenerateToken = () => invoke<string>("regenerate_token");
+export const enableAutostart = () => invoke<void>("enable_autostart");
+export const disableAutostart = () => invoke<void>("disable_autostart");
+export const isAutostartEnabled = () => invoke<boolean>("is_autostart_enabled");
 
 export const getAutoLaunch = () => invoke<boolean>("get_auto_launch");
 export const setAutoLaunch = (enabled: boolean) => invoke<void>("set_auto_launch", { enabled });
