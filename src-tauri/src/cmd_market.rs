@@ -5,120 +5,364 @@ use serde_json::json;
 use std::sync::Arc;
 use tauri::State;
 
-/// 内置推荐列表（也作为 registry 的离线 fallback）
-fn builtin_items() -> Vec<(&'static str, &'static str, &'static str, &'static str, u64)> {
+const ANTHROPIC_SKILLS_REPO: &str = "anthropics/claude-plugins-official";
+
+fn cache_path(state: &AppState) -> std::path::PathBuf {
+    state.data_dir.join("market-cache.json")
+}
+
+fn builtin_servers() -> Vec<(&'static str, &'static str, &'static str, &'static str, u64)> {
     vec![
-        ("filesystem", "server", "@modelcontextprotocol/server-filesystem", "本地文件系统读写（推荐 . 作为工作目录）", 12000),
-        ("fetch", "server", "@modelcontextprotocol/server-fetch", "网页抓取（HTML → Markdown）", 8500),
-        ("github", "server", "@modelcontextprotocol/server-github", "GitHub API（issues / PRs / code）", 15000),
-        ("postgres", "server", "@modelcontextprotocol/server-postgres", "PostgreSQL 只读查询", 4200),
-        ("puppeteer", "server", "@modelcontextprotocol/server-puppeteer", "浏览器自动化", 5800),
-        ("memory", "server", "@modelcontextprotocol/server-memory", "基于知识图谱的长期记忆", 6300),
-        ("code-review", "skill", "local", "代码评审 Skill", 910),
-        ("explain-code", "skill", "local", "逐段解释代码 Skill", 1300),
-        ("commit-msg", "skill", "local", "生成 Conventional Commits 信息", 2100),
+        ("fetch",              "server", "@modelcontextprotocol/server-fetch",                "网页抓取（HTML → Markdown）", 8500),
+        ("memory",             "server", "@modelcontextprotocol/server-memory",              "基于知识图谱的长期记忆", 6300),
+        ("sequentialthinking", "server", "@modelcontextprotocol/server-sequential-thinking",  "分步推理 / 复杂任务分解", 9100),
+        ("context7",           "server", "@upstash/context7-mcp",                            "库/框架官方文档查询", 22800),
     ]
 }
 
+fn builtin_skills() -> Vec<(&'static str, &'static str, &'static str, &'static str, u64)> {
+    vec![
+        ("create-skill",   "skill", "alexanderop", "从需求描述创建完整 SKILL.md（alexanderop/claude-code-builder）", 280),
+        ("grill-me",       "skill", "mattpocock",  "用尖锐的反向问题审视当前方案（mattpocock/skills）", 740),
+        ("superpower",     "skill", "obra",        "通用瑞士军刀 Skill（obra/superpowers）", 1500),
+        ("frontend-design","skill", "anthropics",  "前端设计 Skill（来自 Anthropic 官方 plugins 仓库）", 560),
+    ]
+}
+
+fn fallback_items() -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for (id, kind, author, desc, installs) in builtin_servers().into_iter().chain(builtin_skills().into_iter()) {
+        out.push(json!({
+            "id": id, "kind": kind, "name": id, "description": desc,
+            "author": author, "tags": Vec::<String>::new(),
+            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
+        }));
+    }
+    out
+}
+
+/// 从 GitHub 拉取 Anthropic Plugins（用 API 读目录 + plugin.json 描述）
+async fn fetch_from_github() -> Result<Vec<serde_json::Value>, String> {
+    // 读 settings 拿 GitHub token（有 token 限流 5000 次/小时，无 token 只有 60 次/小时）
+    let github_token = crate::state::try_current()
+        .and_then(|s| s.storage.load_settings().ok())
+        .and_then(|s| s.github_token.clone())
+        .unwrap_or_default();
+
+    eprintln!("[market] fetch_from_github: listing plugins (token={})...", if github_token.is_empty() { "none" } else { "set" });
+    let mut builder = reqwest::Client::builder().user_agent("ms-manage/0.1.0");
+    let client = builder.build().map_err(|e| format!("HTTP client failed: {e}"))?;
+
+    let url = format!("https://api.github.com/repos/{}/contents/plugins", ANTHROPIC_SKILLS_REPO);
+    let mut req = client
+        .get(&url)
+        .header("Accept", "application/vnd.github.v3+json");
+    if !github_token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {github_token}"));
+    }
+    let resp = req.send().await
+        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("GitHub API response parse failed: {e}"))?;
+
+    let mut items: Vec<serde_json::Value> = Vec::new();
+
+    if let Some(entries) = body.as_array() {
+        eprintln!("[market] found {} plugin directories", entries.len());
+        // 逐个读取 plugin.json（不用 stream，简单循环避免 async 类型问题）
+        for entry in entries {
+            let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let entry_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if entry_type != "dir" || name.starts_with('.') {
+                continue;
+            }
+            let desc = fetch_plugin_desc(&client, name).await
+                .unwrap_or_else(|| name.replace('-', " "));
+            eprintln!("[market]   plugin: {} - {}", name, desc);
+            items.push(json!({
+                "id": name, "kind": "skill", "name": name,
+                "description": desc, "author": "anthropic",
+                "source_url": format!("https://github.com/{}/tree/main/plugins/{}", ANTHROPIC_SKILLS_REPO, name),
+                "tags": ["anthropic"],
+                "installs": 0, "updated_at": Utc::now().to_rfc3339(),
+            }));
+        }
+    }
+
+    for (id, kind, author, desc, installs) in builtin_servers() {
+        items.push(json!({
+            "id": id, "kind": kind, "name": id, "description": desc,
+            "author": author, "tags": Vec::<String>::new(),
+            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
+        }));
+    }
+
+    for (id, kind, author, desc, installs) in builtin_skills() {
+        items.push(json!({
+            "id": id, "kind": kind, "name": id, "description": desc,
+            "author": author, "tags": Vec::<String>::new(),
+            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
+        }));
+    }
+
+    eprintln!("[market] fetch_from_github done, total {} items", items.len());
+    Ok(items)
+}
+
+/// 读取 plugins/<name>/.claude-plugin/plugin.json 的 description
+async fn fetch_plugin_desc(client: &reqwest::Client, name: &str) -> Option<String> {
+    let github_token = crate::state::try_current()
+        .and_then(|s| s.storage.load_settings().ok())
+        .and_then(|s| s.github_token.clone())
+        .unwrap_or_default();
+
+    let url = format!(
+        "https://api.github.com/repos/{}/contents/plugins/{}/.claude-plugin/plugin.json",
+        ANTHROPIC_SKILLS_REPO, name
+    );
+    let mut req = client
+        .get(&url)
+        .header("Accept", "application/vnd.github.v3+json");
+    if !github_token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {github_token}"));
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let content = body.get("content")?.as_str()?;
+    let decoded = base64_decode(content).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&decoded).ok()?;
+    json.get("description")?.as_str().map(|s| s.to_string())
+}
+
+/// 简单 base64 解码（不需要额外 crate）
+fn base64_decode(s: &str) -> Result<String, String> {
+    const TABLE: [u8; 128] = {
+        let mut t = [255u8; 128];
+        let mut i = 0;
+        while i < 26 { t[b'A' as usize + i] = i as u8; i += 1; }
+        while i < 52 { t[b'a' as usize + (i - 26)] = i as u8; i += 1; }
+        while i < 62 { t[b'0' as usize + (i - 52)] = i as u8; i += 1; }
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t
+    };
+    let clean: Vec<u8> = s.bytes().filter(|&b| b != b'\n' && b != b'\r' && b != b' ').collect();
+    if clean.is_empty() { return Ok(String::new()); }
+    let mut out = Vec::new();
+    for chunk in clean.chunks(4) {
+        let mut buf = [0u8; 4];
+        for (i, &b) in chunk.iter().enumerate() {
+            buf[i] = TABLE.get(b as usize).copied().unwrap_or(0);
+        }
+        out.push((buf[0] << 2) | (buf[1] >> 4));
+        if chunk.len() > 2 { out.push((buf[1] << 4) | (buf[2] >> 2)); }
+        if chunk.len() > 3 { out.push((buf[2] << 6) | buf[3]); }
+    }
+    String::from_utf8(out).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-pub async fn fetch_market(kind: Option<String>) -> Result<Vec<serde_json::Value>, String> {
-    let result: Vec<serde_json::Value> = builtin_items().into_iter()
-        .filter(|(_, k, _, _, _)| kind.as_ref().map(|kk| kk == *k).unwrap_or(true))
-        .map(|(id, kind, author, desc, installs)| json!({
-            "id": id,
-            "kind": kind,
-            "name": id,
-            "description": desc,
-            "author": author,
-            "tags": [],
-            "installs": installs,
-            "updated_at": "2026-05-01T00:00:00Z",
-        }))
-        .collect();
-    Ok(result)
+pub async fn fetch_market(
+    kind: Option<String>,
+    _force_refresh: Option<bool>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    eprintln!("[market] fetch_market: kind={:?}", kind);
+
+    // 全部用本地默认（4 server + 4 skill），不再访问 GitHub
+    let all = default_market_items();
+    if let Ok(json) = serde_json::to_string_pretty(&all) {
+        let cp = cache_path(&state);
+        let _ = std::fs::write(cp, json);
+    }
+
+    let filtered: Vec<serde_json::Value> = all.into_iter().filter(|item| {
+        kind.as_ref().map(|k| item.get("kind").and_then(|v| v.as_str()) == Some(k.as_str())).unwrap_or(true)
+    }).collect();
+
+    eprintln!("[market] returning {} items (kind={:?})", filtered.len(), kind);
+    Ok(filtered)
+}
+
+/// 返回本地默认的 4 server + 4 skill
+fn default_market_items() -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for (id, kind, author, desc, installs) in builtin_servers().into_iter().chain(builtin_skills().into_iter()) {
+        out.push(json!({
+            "id": id, "kind": kind, "name": id, "description": desc,
+            "author": author, "source_url": "", "tags": Vec::<String>::new(),
+            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
+        }));
+    }
+    out
+}
+
+async fn fetch_and_cache(cp: &std::path::Path) -> Result<Vec<serde_json::Value>, String> {
+    match fetch_from_github().await {
+        Ok(list) => {
+            if let Ok(json) = serde_json::to_string_pretty(&list) {
+                let _ = std::fs::write(cp, json);
+            }
+            Ok(list)
+        }
+        Err(e) => {
+            eprintln!("[market] GitHub fetch failed: {e}, using fallback and caching");
+            let fallback = fallback_items();
+            if let Ok(json) = serde_json::to_string_pretty(&fallback) {
+                let _ = std::fs::write(cp, json);
+            }
+            Ok(fallback)
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn install_market_item(
     id: String,
+    kind: String,
+    source_url: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    let item = builtin_items().into_iter().find(|(i, _, _, _, _)| *i == id)
-        .ok_or_else(|| format!("market item '{id}' not found"))?;
-    let (mid, kind, author, desc, _installs) = item;
-    match kind {
-        "server" => install_market_server(state.inner(), mid, author, desc),
-        "skill"  => install_market_skill(state.inner(), mid, author, desc),
-        _ => Err(format!("unknown market item kind '{kind}'")),
+    match kind.as_str() {
+        "server" => install_market_server(state.inner(), &id),
+        "skill" => {
+            // 按 id 决定从哪取：local 内嵌 vs github 下载
+            let id_str = id.clone();
+            match id.as_str() {
+                "frontend-design" => install_skill_from_github(state.inner(), &id_str, "").await,
+                "grill-me" => install_skill_from_github(state.inner(), &id_str, "").await,
+                "superpower" => install_skill_from_github(state.inner(), &id_str, "").await,
+                _ => install_market_skill(state.inner(), &id),
+            }
+        }
+        _ => Err(format!("unknown kind '{kind}'")),
     }
 }
 
-fn install_market_server(state: &AppState, id: &str, _author: &str, desc: &str) -> Result<(), String> {
-    // 幂等：已存在同名 id 的 server 直接返回 OK
-    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
-    if list.iter().any(|s| s.name == id) {
-        return Ok(());
-    }
-    let now = Utc::now().to_rfc3339();
-    let (command, args) = match id {
-        "filesystem" => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-filesystem".to_string(), ".".to_string()]),
-        "fetch"      => ("uvx".to_string(), vec!["mcp-server-fetch".to_string()]),
-        "github"     => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-github".to_string()]),
-        "postgres"   => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-postgres".to_string()]),
-        "puppeteer"  => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-puppeteer".to_string()]),
-        "memory"     => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-memory".to_string()]),
-        _ => return Err(format!("unknown server template '{id}'")),
-    };
-    let mut env = std::collections::HashMap::new();
-    if id == "github" {
-        env.insert("GITHUB_PERSONAL_ACCESS_TOKEN".to_string(), String::new());
-    }
-    let mut tags = vec!["market".to_string()];
-    tags.push(id.to_string());
-    let s = StoredServer {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: id.to_string(),
-        description: Some(desc.to_string()),
-        transport: "stdio".to_string(),
-        command: Some(command.to_string()),
-        args,
-        env,
-        cwd: None,
-        url: None,
-        headers: std::collections::HashMap::new(),
-        bearer_token: None,
-        enabled: true,
-        auto_start: Some(false),
-        tags,
-        project_id: None,
-        disabled_tools: Vec::new(),
-        created_at: now.clone(),
-        updated_at: now,
-    };
-    list.push(s);
-    state.storage.save_servers(&list).map_err(|e| e.to_string())
-}
-
-fn install_market_skill(state: &AppState, id: &str, _author: &str, desc: &str) -> Result<(), String> {
-    use crate::storage::StoredSkill;
+async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str) -> Result<(), String> {
     let dir = state.storage.skills_dir();
     let skill_dir = dir.join(sanitize_id(id));
     let file = skill_dir.join(crate::storage::skills::SKILL_FILE);
-    if file.exists() {
-        return Ok(());
+    if file.exists() { return Ok(()); }
+    std::fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
+
+    // 读 settings 拿 GitHub token
+    let github_token = crate::state::try_current()
+        .and_then(|s| s.storage.load_settings().ok())
+        .and_then(|s| s.github_token.clone())
+        .unwrap_or_default();
+
+    // 按 id 自动选 repo + 路径：
+    //   frontend-design → anthropics/claude-plugins-official/plugins/<id>/skills/<id>/SKILL.md
+    //   grill-me         → mattpocock/skills/skills/productivity/<id>/SKILL.md
+    //   superpower        → obra/superpowers/skills/<id>/SKILL.md
+    let url = match id {
+        "frontend-design" => format!(
+            "https://api.github.com/repos/{}/contents/plugins/{}/skills/{}/SKILL.md",
+            ANTHROPIC_SKILLS_REPO, id, id
+        ),
+        "grill-me" => format!(
+            "https://api.github.com/repos/mattpocock/skills/contents/skills/productivity/{}/SKILL.md",
+            id
+        ),
+        "superpower" => format!(
+            "https://api.github.com/repos/obra/superpowers/contents/skills/using-superpowers/SKILL.md"
+        ),
+        "create-skill" => format!(
+            "https://api.github.com/repos/alexanderop/claude-code-builder/contents/commands/{}.md",
+            id
+        ),
+        _ => format!(
+            "https://api.github.com/repos/{}/contents/plugins/{}/skills/{}/SKILL.md",
+            ANTHROPIC_SKILLS_REPO, id, id
+        ),
+    };
+    let client = reqwest::Client::builder()
+        .user_agent("ms-manage/0.1.0")
+        .build()
+        .map_err(|e| format!("HTTP client failed: {e}"))?;
+    let mut req = client.get(&url)
+        .header("Accept", "application/vnd.github.v3.raw");
+    if !github_token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {github_token}"));
     }
+    let resp = req.send().await
+        .map_err(|e| format!("download SKILL.md failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("download SKILL.md failed: HTTP {}", resp.status()));
+    }
+    let content = resp.text().await.map_err(|e| format!("read failed: {e}"))?;
+    std::fs::write(&file, &content).map_err(|e| e.to_string())?;
+    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    Ok(())
+}
+
+fn install_market_server(state: &AppState, id: &str) -> Result<(), String> {
+    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
+    if list.iter().any(|s| s.name == id) { return Ok(()); }
+    let now = Utc::now().to_rfc3339();
+    let (command, args) = match id {
+        "fetch"              => ("uvx".to_string(), vec!["mcp-server-fetch".to_string()]),
+        "memory"             => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-memory".to_string()]),
+        "sequentialthinking" => ("npx".to_string(), vec!["-y".to_string(), "@modelcontextprotocol/server-sequential-thinking".to_string()]),
+        "context7"           => ("npx".to_string(), vec!["-y".to_string(), "@upstash/context7-mcp".to_string()]),
+        _ => return Err(format!("unknown server template '{id}'")),
+    };
+    let mut env = std::collections::HashMap::new();
+    if id == "context7" { env.insert("CONTEXT7_API_KEY".to_string(), String::new()); }
+    let mut tags = vec!["market".to_string(), id.to_string()];
+    list.push(StoredServer {
+        id: uuid::Uuid::new_v4().to_string(), name: id.to_string(),
+        description: None, transport: "stdio".to_string(),
+        command: Some(command), args, env, cwd: None, url: None,
+        headers: std::collections::HashMap::new(), bearer_token: None,
+        enabled: true, auto_start: Some(false), tags, project_id: None,
+        disabled_tools: Vec::new(), created_at: now.clone(), updated_at: now,
+    });
+    state.storage.save_servers(&list).map_err(|e| e.to_string())
+}
+
+fn install_market_skill(state: &AppState, id: &str) -> Result<(), String> {
+    let dir = state.storage.skills_dir();
+    let skill_dir = dir.join(sanitize_id(id));
+    let file = skill_dir.join(crate::storage::skills::SKILL_FILE);
+    if file.exists() { return Ok(()); }
     std::fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
     let now = Utc::now().to_rfc3339();
     let body = match id {
-        "code-review" => "# code-review\n\n执行严格的代码评审。覆盖：\n\n- 命名一致性与可读性\n- 错误处理与边界条件\n- 并发与资源释放\n- 性能与可维护性\n\n针对每条意见，给出文件:行号 引用与最小可行修改示例。\n",
-        "explain-code" => "# explain-code\n\n逐段解释给定代码片段。规则：\n\n- 每一段先给出一句话目的\n- 再展开讲关键 API/算法\n- 最后说明潜在陷阱\n",
-        "commit-msg" => "# commit-msg\n\n根据 git diff 生成 Conventional Commits 提交信息。\n\n格式：\n\n```\n<type>(<scope>): <subject>\n\n<body>\n```\n\ntype ∈ feat / fix / refactor / docs / test / chore / perf。\nsubject 不超过 72 字符，祈使语气。\n",
+        "create-skill" => "# create-skill\n\n创建新 Skill 的工作流：\n\n1. 问用户目的 + 场景\n2. 问调用方式\n3. 起草 frontmatter\n4. 写正文\n5. 保存到 skills/<id>/SKILL.md\n",
+        "grill-me" => concat!(
+            "---\n",
+            "name: grill-me\n",
+            "description: A relentless interview to sharpen a plan or design.\n",
+            "---\n\n",
+            "# /grill-me\n\n",
+            "Interview me relentlessly about every aspect of this plan until we reach a shared understanding. ",
+            "Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. ",
+            "For each question, provide your recommended answer.\n\n",
+            "Ask the questions one at a time, waiting for feedback on each question before continuing. ",
+            "Asking multiple questions at once is bewildering.\n\n",
+            "If a question can be answered by exploring the codebase, explore the codebase instead.\n\n",
+            "---\n\n",
+            "## Process\n\n",
+            "For each question, the model provides its recommended answer, resolving dependencies between decisions one-by-one.\n\n",
+            "## When to use\n\n",
+            "- User wants to stress-test a plan before building\n",
+            "- User uses any \"grill\" trigger phrases\n\n",
+            "## Source\n\n",
+            "From https://github.com/mattpocock/skills (mattpocock/skills, productivity/grill-me + grilling)\n",
+        ),
+        "superpower" => "# superpower\n\n通用瑞士军刀 Skill，不知道用啥时兜底。\n\n理解任务 → 判断类型 → 执行工作流\n",
         _ => return Err(format!("unknown skill template '{id}'")),
     };
-    let content = format!("---\nid: {id}\nname: {id}\ndescription: {desc}\nenabled: true\n---\n\n{body}");
+    let content = format!("---\nid: {id}\nname: {id}\ndescription: {id}\nenabled: true\n---\n\n{body}");
     std::fs::write(&file, content).map_err(|e| e.to_string())?;
-    let _ = StoredSkill { id: id.to_string(), name: id.to_string(), description: Some(desc.into()), content: body.into(), frontmatter: Default::default(), dir_path: skill_dir.to_string_lossy().to_string(), enabled: true, created_at: now.clone(), updated_at: now };
-    // 触发 reconcile
     let _ = crate::storage::skills::reconcile_after_change(&state.storage);
     Ok(())
 }
@@ -127,26 +371,16 @@ fn sanitize_id(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
-/// CLI 入口：直接从默认 storage 路径安装一个市场 item（不进 GUI）
 pub fn install_from_cli(id: &str) {
     use crate::state::AppState;
-    let state = match AppState::initialize() {
-        Ok(s) => s,
-        Err(e) => { eprintln!("init state failed: {e}"); std::process::exit(1); }
-    };
-    let item = builtin_items().into_iter().find(|(i, _, _, _, _)| *i == id);
-    match item {
-        None => { eprintln!("✗ unknown market id '{id}'"); std::process::exit(2); }
-        Some((_, kind, author, desc, _)) => {
-            let result = match kind {
-                "server" => install_market_server(&state, id, author, desc),
-                "skill"  => install_market_skill(&state, id, author, desc),
-                _ => Err(format!("unknown kind '{kind}'")),
-            };
-            match result {
-                Ok(()) => println!("✓ installed '{id}' ({kind})"),
-                Err(e) => { eprintln!("✗ install failed: {e}"); std::process::exit(2); }
-            }
-        }
+    let state = AppState::initialize().expect("init state failed");
+    let result = builtin_skills().iter().find(|(i, _, _, _, _)| *i == id)
+        .map(|_| install_market_skill(&state, id))
+        .or_else(|| builtin_servers().iter().find(|(i, _, _, _, _)| *i == id)
+            .map(|_| install_market_server(&state, id)))
+        .unwrap_or_else(|| Err(format!("unknown market id '{id}'")));
+    match result {
+        Ok(()) => println!("✓ installed '{id}'"),
+        Err(e) => { eprintln!("✗ install failed: {e}"); std::process::exit(2); }
     }
 }

@@ -102,6 +102,8 @@ pub struct StoredSettings {
     pub auto_inject_npm_registry: bool,
     #[serde(default)]
     pub mcp_token: Option<String>,
+    #[serde(default)]
+    pub github_token: Option<String>,
     /// 技能同步目标（每个编辑器一个），含 builtin 预设 + 用户自加
     #[serde(default)]
     pub skill_targets: Vec<SkillTarget>,
@@ -149,6 +151,7 @@ impl Default for StoredSettings {
             npm_registry: default_npm_registry(),
             auto_inject_npm_registry: true,
             mcp_token: Some(generate_token()),
+            github_token: None,
             skill_targets: default_skill_targets(),
         }
     }

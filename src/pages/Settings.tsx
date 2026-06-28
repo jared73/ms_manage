@@ -79,62 +79,20 @@ export function Settings() {
           </Row>
         </div>
 
-        {/* Proxy */}
-        <div className="card space-y-3">
-          <h3 className="font-semibold">{t("settings.proxy")}</h3>
-          <Row label={t("settings.proxy_mode_stdio").split(" ")[0]}>
-            <div className="flex gap-2">
-              <button className={settings.proxy_mode === "stdio" ? "btn-primary" : "btn-ghost"} onClick={() => setSettings({ ...settings, proxy_mode: "stdio" })}>{t("settings.proxy_mode_stdio")}</button>
-              <button className={settings.proxy_mode === "http"  ? "btn-primary" : "btn-ghost"} onClick={() => setSettings({ ...settings, proxy_mode: "http"  })}>{t("settings.proxy_mode_http")}</button>
-            </div>
-          </Row>
-          {settings.proxy_mode === "http" && (
-            <Row label={t("settings.proxy_http_port")}>
-              <input type="number" className="input max-w-[160px]" value={settings.proxy_http_port ?? 39231}
-                onChange={(e) => setSettings({ ...settings, proxy_http_port: parseInt(e.target.value, 10) || 39231 })} />
-            </Row>
-          )}
-          <Row label="自动启动代理">
-            <input type="checkbox" checked={settings.auto_start_proxy ?? false}
-              onChange={(e) => setSettings({ ...settings, auto_start_proxy: e.target.checked })} />
-            <span className="ml-2 text-xs text-fg-muted">应用启动时自动启动 MCP Router 服务</span>
-          </Row>
-        </div>
-
-        {/* NPM / Registry */}
+        {/* NPM / Registry —— 只保留"自动注入"勾选，URL 和 4 个镜像按钮都删了
+            （硬编码使用淘宝镜像，URL 改了也不生效）*/}
         <div className="card space-y-3">
           <h3 className="font-semibold">NPM / 镜像源</h3>
           <Row label="自动注入">
             <input type="checkbox" checked={settings.auto_inject_npm_registry ?? true}
-              onChange={(e) => setSettings({ ...settings, auto_inject_npm_registry: e.target.checked })} />
-            <span className="ml-2 text-xs text-fg-muted">启动 stdio 子 server 时自动注入 NPM_CONFIG_REGISTRY</span>
-          </Row>
-          <Row label="镜像 URL">
-            <input className="input max-w-md" value={settings.npm_registry ?? ""}
-              onChange={(e) => setSettings({ ...settings, npm_registry: e.target.value })}
-              placeholder="https://registry.npmmirror.com" />
-          </Row>
-          <div className="flex flex-wrap gap-2 pl-32">
-            {[
-              ["registry.npmmirror.com", "淘宝镜像 (推荐)"],
-              ["registry.npmjs.org", "官方 (国外)"],
-              ["mirrors.cloud.tencent.com/npm", "腾讯云"],
-              ["mirrors.huaweicloud.com/repository/npm", "华为云"],
-            ].map(([u, label]) => (
-              <button key={u} className="btn-ghost text-xs" onClick={() => setSettings({ ...settings, npm_registry: `https://${u}` })}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Market */}
-        <div className="card space-y-3">
-          <h3 className="font-semibold">{t("market.title")}</h3>
-          <Row label={t("settings.registry_url")}>
-            <input className="input max-w-md" value={settings.registry_url ?? ""}
-              onChange={(e) => setSettings({ ...settings, registry_url: e.target.value || undefined })}
-              placeholder="https://registry.npmmirror.com/-/v1/search?text=keyword:mcp" />
+              onChange={(e) => {
+                const updated = { ...settings, auto_inject_npm_registry: e.target.checked };
+                setSettings(updated);
+                void updateSettings(updated); // 自动保存，不用点"保存"按钮
+              }} />
+            <span className="ml-2 text-xs text-fg-muted">
+              启动 stdio 子 server 时自动注入 <code className="text-fg">NPM_CONFIG_REGISTRY=淘宝镜像</code>
+            </span>
           </Row>
         </div>
 

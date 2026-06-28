@@ -8,7 +8,7 @@ export default {
     servers: "MCP 服务",
     skills: "Skill",
     connections: "客户端接入",
-    market: "市场",
+    market: "可用插件",
     logs: "日志",
     settings: "设置",
   },

@@ -93,6 +93,7 @@ export interface MarketItem {
   tags?: string[];
   installs: number;
   updated_at: string;
+  source_url?: string;  // skill 来自 GitHub 时带这个
 }
 
 export interface AppSettings {
@@ -179,8 +180,9 @@ export const startProxy = () => invoke<ProxyStatus>("start_proxy");
 export const stopProxy = () => invoke<void>("stop_proxy");
 
 // ---- Market ----
-export const fetchMarket = (kind?: "server" | "skill") => invoke<MarketItem[]>("fetch_market", { kind });
-export const installMarketItem = (id: string) => invoke<void>("install_market_item", { id });
+export const fetchMarket = (kind?: "server" | "skill", force_refresh?: boolean) =>
+  invoke<MarketItem[]>("fetch_market", { kind, force_refresh: force_refresh ?? false });
+export const installMarketItem = (id: string, kind: string, source_url?: string) => invoke<void>("install_market_item", { id, kind, source_url });
 
 // ---- Logs ----
 export const listLogs = (opts?: { limit?: number; level?: string; source?: string }) =>

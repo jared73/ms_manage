@@ -22,6 +22,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub mcp_token: Option<String>,
     #[serde(default)]
+    pub github_token: Option<String>,
+    #[serde(default)]
     pub skill_targets: Vec<crate::storage::SkillTarget>,
 }
 
@@ -39,6 +41,7 @@ impl From<StoredSettings> for AppSettings {
             npm_registry: s.npm_registry,
             auto_inject_npm_registry: s.auto_inject_npm_registry,
             mcp_token: s.mcp_token,
+            github_token: s.github_token,
             skill_targets: s.skill_targets,
         }
     }
@@ -58,6 +61,7 @@ impl From<AppSettings> for StoredSettings {
             npm_registry: s.npm_registry,
             auto_inject_npm_registry: s.auto_inject_npm_registry,
             mcp_token: s.mcp_token,
+            github_token: s.github_token,
             skill_targets: s.skill_targets,
         }
     }
