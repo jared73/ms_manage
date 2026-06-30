@@ -2,8 +2,98 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* ===== 4 套主题：每套 14 个 CSS 变量 =====
+   颜色用 "R G B" 三元组形式，便于 Tailwind 透明度修饰符 /15、/25 等 */
+:root,
+[data-theme="purple"] {
+  --bg: 15 17 21;
+  --bg-subtle: 22 25 34;
+  --bg-elev: 28 32 48;
+  --fg: 230 232 239;
+  --fg-muted: 154 160 176;
+  --accent: 124 92 255;
+  --accent-hover: 106 76 240;
+  --ok: 34 197 94;
+  --warn: 245 158 11;
+  --err: 239 68 68;
+  --border: 255 255 255;     /* alpha 在 tailwind 配置里加 */
+  --overlay: 0 0 0;
+  --overlay-soft: 255 255 255;
+  --scrollbar-thumb: #2a2f3d;
+  --scrollbar-thumb-hover: #3a4050;
+  --border-alpha: 0.08;
+  --overlay-alpha: 0.5;
+  --overlay-soft-alpha: 0.03;
   color-scheme: dark;
+}
+
+[data-theme="midnight"] {
+  --bg: 10 22 40;
+  --bg-subtle: 15 34 64;
+  --bg-elev: 22 49 90;
+  --fg: 219 234 254;
+  --fg-muted: 147 197 253;
+  --accent: 56 189 248;
+  --accent-hover: 14 165 233;
+  --ok: 34 197 94;
+  --warn: 245 158 11;
+  --err: 239 68 68;
+  --border: 125 211 252;
+  --overlay: 0 0 0;
+  --overlay-soft: 125 211 252;
+  --scrollbar-thumb: #1e3a5f;
+  --scrollbar-thumb-hover: #2c5180;
+  --border-alpha: 0.12;
+  --overlay-alpha: 0.55;
+  --overlay-soft-alpha: 0.04;
+  color-scheme: dark;
+}
+
+[data-theme="forest"] {
+  --bg: 15 31 21;
+  --bg-subtle: 22 41 30;
+  --bg-elev: 28 53 38;
+  --fg: 220 252 231;
+  --fg-muted: 134 239 172;
+  --accent: 52 211 153;
+  --accent-hover: 16 185 129;
+  --ok: 34 197 94;
+  --warn: 245 158 11;
+  --err: 239 68 68;
+  --border: 134 239 172;
+  --overlay: 0 0 0;
+  --overlay-soft: 134 239 172;
+  --scrollbar-thumb: #1f3a28;
+  --scrollbar-thumb-hover: #2c5238;
+  --border-alpha: 0.12;
+  --overlay-alpha: 0.5;
+  --overlay-soft-alpha: 0.04;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: 248 250 252;
+  --bg-subtle: 255 255 255;
+  --bg-elev: 241 245 249;
+  --fg: 15 23 42;
+  --fg-muted: 100 116 139;
+  --accent: 124 58 237;
+  --accent-hover: 109 40 217;
+  --ok: 22 163 74;
+  --warn: 217 119 6;
+  --err: 220 38 38;
+  --border: 15 23 42;
+  --overlay: 15 23 42;
+  --overlay-soft: 15 23 42;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --border-alpha: 0.1;
+  --overlay-alpha: 0.4;
+  --overlay-soft-alpha: 0.04;
+  color-scheme: light;
+}
+
+:root {
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -11,13 +101,13 @@
 }
 
 html, body, #root { height: 100%; }
-body { margin: 0; }
+body { margin: 0; background: rgb(var(--bg)); color: rgb(var(--fg)); }
 
 /* 滚动条样式 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a2f3d; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #3a4050; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
 @layer components {
   .btn {
@@ -30,18 +120,24 @@ body { margin: 0; }
   .btn-ok      { @apply btn bg-ok/15 text-ok hover:bg-ok/25; }
 
   .card {
-    @apply rounded-lg border border-white/5 bg-bg-subtle p-4;
+    @apply rounded-lg bg-bg-subtle p-4;
+    border: 1px solid rgb(var(--border) / var(--border-alpha));
   }
 
   .input {
-    @apply w-full rounded-md border border-white/10 bg-bg px-3 py-1.5 text-sm
+    @apply w-full rounded-md bg-bg px-3 py-1.5 text-sm
            text-fg placeholder:text-fg-muted/60
            focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/40;
+    border: 1px solid rgb(var(--border) / var(--border-alpha));
+    &:focus {
+      border-color: rgb(var(--accent));
+    }
   }
 
   .badge { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
   .badge-ok   { @apply badge bg-ok/15 text-ok; }
   .badge-warn { @apply badge bg-warn/15 text-warn; }
   .badge-err  { @apply badge bg-err/15 text-err; }
-  .badge-mute { @apply badge bg-white/5 text-fg-muted; }
+  .badge-mute { @apply badge bg-overlay-soft text-fg-muted; }
+  .badge-accent { @apply badge bg-accent/15 text-accent; }
 }

@@ -265,7 +265,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
       }
     >
       <div className="space-y-3">
-        <div className="rounded-md border border-white/10 bg-bg-subtle p-3 text-xs text-fg-muted">
+        <div className="rounded-md border border-border bg-bg-subtle p-3 text-xs text-fg-muted">
           支持 <code className="text-fg">.zip</code> / <code className="text-fg">.tar.gz</code> / <code className="text-fg">.tgz</code> 压缩包，
           或包含 <code className="text-fg">SKILL.md</code> 的文件夹路径。压缩包/文件夹顶层可有多个 skill 子目录，逐个识别。
           或者直接拖文件到页面也可以。
@@ -281,7 +281,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
               spellCheck={false}
             />
             <button
-              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-fg-muted hover:bg-white/10 hover:text-fg transition-colors"
+              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-fg-muted hover:bg-overlay-soft hover:text-fg transition-colors"
               onClick={pickFile}
               title="打开文件选择对话框"
               type="button"
@@ -323,10 +323,10 @@ function TargetRow({ target, onReload }: { target: SkillTarget; onReload: () => 
       {/* toggle */}
       <button
         onClick={handleToggle}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${target.enabled ? "bg-accent" : "bg-white/10"}`}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${target.enabled ? "bg-accent" : "bg-overlay-soft"}`}
         title={target.enabled ? "已启用，点此关闭" : "已关闭，点此启用"}
       >
-        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${target.enabled ? "left-4" : "left-0.5"}`} />
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${target.enabled ? "left-4" : "left-0.5"}`} />
       </button>
       <div className="w-32 shrink-0 text-sm font-medium">{target.name}</div>
       <code className="flex-1 truncate text-xs text-fg-muted">{target.path}</code>
@@ -465,7 +465,7 @@ function SkillFormModal({ initial, onClose, onSaved }: {
           placeholder={t("skills.content_placeholder") as string}
         />
       ) : (
-        <div className="prose prose-invert max-w-none rounded-md border border-white/5 bg-bg-subtle p-4">
+        <div className="prose prose-invert max-w-none rounded-md border border-border bg-bg-subtle p-4 [&_*]:text-fg [&_code]:text-accent [&_a]:text-accent">
           <pre className="whitespace-pre-wrap text-sm">{content.replace(/^---[\s\S]*?---\n/, "")}</pre>
         </div>
       )}

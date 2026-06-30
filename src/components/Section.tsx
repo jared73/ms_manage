@@ -21,7 +21,7 @@ export function Section({ title, action, children, className }: {
 
 export function EmptyHint({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-white/10 bg-bg-subtle p-10 text-center text-sm text-fg-muted">
+    <div className="rounded-lg border border-dashed border-border bg-bg-subtle p-10 text-center text-sm text-fg-muted">
       {children}
     </div>
   );

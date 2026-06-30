@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { Layout } from "@/components/Layout";
@@ -8,8 +9,22 @@ import { Connections } from "@/pages/Connections";
 import { Market } from "@/pages/Market";
 import { Settings } from "@/pages/Settings";
 import { Logs } from "@/pages/Logs";
+import { getSettings } from "@/lib/ipc";
+import { useApp } from "@/stores/app";
 
 export default function App() {
+  const setSettings = useApp((s) => s.setSettings);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await getSettings();
+        setSettings(s);
+      } catch {
+        // 忽略：使用默认主题
+      }
+    })();
+  }, [setSettings]);
+
   return (
     <HashRouter>
       <Toaster position="top-right" richColors />

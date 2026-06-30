@@ -92,6 +92,13 @@ export default {
     data_dir: "Data directory", open_data_dir: "Open data directory",
     npm_registry: "NPM Registry",
     auto_inject_npm_registry: "Auto-inject NPM registry",
+    theme_card_title: "Theme",
+    theme_card_desc: "Pick a color scheme — applies instantly",
+    theme_purple: "Purple",
+    theme_midnight: "Midnight",
+    theme_forest: "Forest",
+    theme_light: "Light",
+    theme_switched: "Theme switched",
   },
   status: { starting: "Starting", running: "Running", stopped: "Stopped", error: "Error", disabled: "Disabled" },
   projects: {

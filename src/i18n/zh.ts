@@ -168,6 +168,13 @@ export default {
     open_data_dir: "打开数据目录",
     npm_registry: "NPM 镜像",
     auto_inject_npm_registry: "自动注入 NPM 镜像",
+    theme_card_title: "主题",
+    theme_card_desc: "选择界面配色，立即生效",
+    theme_purple: "暗紫",
+    theme_midnight: "午夜蓝",
+    theme_forest: "护眼绿",
+    theme_light: "明亮浅色",
+    theme_switched: "主题已切换",
   },
   status: {
     starting: "启动中",

@@ -141,7 +141,7 @@ impl Default for StoredSettings {
     fn default() -> Self {
         Self {
             language: "zh".into(),
-            theme: "dark".into(),
+            theme: "purple".into(),
             auto_launch: false,
             proxy_mode: "stdio".into(),
             proxy_http_port: 39231,
@@ -273,6 +273,11 @@ impl Storage {
         }
         let raw = std::fs::read_to_string(&p)?;
         let mut s: StoredSettings = serde_json::from_str(&raw).unwrap_or_default();
+        // 主题向后兼容：dark/system/未知 → purple，light → light
+        s.theme = match s.theme.as_str() {
+            "purple" | "midnight" | "forest" | "light" => s.theme.clone(),
+            _ => "purple".into(),
+        };
         if s.mcp_token.is_none() {
             s.mcp_token = Some(StoredSettings::default().mcp_token.unwrap_or_default());
             let _ = std::fs::write(&p, serde_json::to_string_pretty(&s)?);

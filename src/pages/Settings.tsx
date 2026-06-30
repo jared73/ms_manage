@@ -5,11 +5,13 @@ import { toast } from "sonner";
 import { Section } from "@/components/Section";
 import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, enableAutostart, disableAutostart, isAutostartEnabled } from "@/lib/ipc";
 import type { AppSettings } from "@/lib/ipc";
-import { useApp } from "@/stores/app";
+import { useApp, type ThemeName } from "@/stores/app";
 
 export function Settings() {
   const { t, i18n } = useTranslation();
   const setLang = useApp((s) => s.setLang);
+  const storeTheme = useApp((s) => s.theme);
+  const setStoreTheme = useApp((s) => s.setTheme);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   const [saved, setSaved] = useState(false);
@@ -40,6 +42,19 @@ export function Settings() {
     setTimeout(() => setSaved(false), 2000);
     void i18n.changeLanguage(settings.language);
     setLang(settings.language);
+  };
+
+  const switchTheme = async (theme: ThemeName) => {
+    if (!settings || theme === storeTheme) return;
+    setStoreTheme(theme);
+    const updated = { ...settings, theme };
+    setSettings(updated);
+    try {
+      await updateSettings(updated);
+      toast.success(t("settings.theme_switched") as string, { duration: 1500 });
+    } catch (e) {
+      toast.error(`Failed: ${e}`);
+    }
   };
 
   const regen = async () => {
@@ -91,6 +106,43 @@ export function Settings() {
           </Row>
         </div>
 
+        {/* 主题选择 */}
+        <div className="card space-y-3">
+          <div>
+            <h3 className="font-semibold">{t("settings.theme_card_title")}</h3>
+            <div className="text-xs text-fg-muted">{t("settings.theme_card_desc")}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {([
+              { id: "purple",   label: t("settings.theme_purple"),   swatch: "#7c5cff", bg: "#0f1115" },
+              { id: "midnight", label: t("settings.theme_midnight"), swatch: "#38bdf8", bg: "#0a1628" },
+              { id: "forest",   label: t("settings.theme_forest"),   swatch: "#34d399", bg: "#0f1f15" },
+              { id: "light",    label: t("settings.theme_light"),    swatch: "#7c3aed", bg: "#f8fafc" },
+            ] as const).map(({ id, label, swatch, bg }) => {
+              const active = storeTheme === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => switchTheme(id)}
+                  className={`group relative overflow-hidden rounded-lg border px-3 py-3 text-left transition-all ${
+                    active ? "border-accent ring-2 ring-accent/40" : "border-border hover:border-accent/50"
+                  }`}
+                >
+                  <div className="mb-2 h-10 w-full rounded-md" style={{ background: bg }}>
+                    <div className="flex h-full w-full items-center justify-end pr-2">
+                      <span className="inline-block h-4 w-4 rounded-full" style={{ background: swatch }} />
+                    </div>
+                  </div>
+                  <div className="text-sm font-medium">{label}</div>
+                  {active && (
+                    <span className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] text-white">✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* 开机自启动 */}
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
@@ -105,11 +157,11 @@ export function Settings() {
             </div>
             <button
               onClick={() => handleAutoLaunch(!autoLaunch)}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${autoLaunch ? "bg-accent" : "bg-white/10"}`}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
               title={autoLaunch ? "已启用，点此关闭" : "已关闭，点此启用"}
             >
               <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${autoLaunch ? "left-5" : "left-0.5"}`}
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg-subtle shadow-sm transition-all ${autoLaunch ? "left-5" : "left-0.5"}`}
               />
             </button>
           </div>

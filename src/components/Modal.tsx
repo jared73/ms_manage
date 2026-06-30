@@ -28,17 +28,17 @@ export function Modal({ open, title, onClose, children, footer, size = "md" }: P
   }[size];
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-overlay backdrop-blur-sm" onClick={onClose}>
       <div
-        className={clsx("w-full rounded-lg border border-white/10 bg-bg-elev shadow-2xl", sizeCls)}
+        className={clsx("w-full rounded-lg border border-border bg-bg-elev shadow-2xl", sizeCls)}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-base font-semibold">{title}</h2>
           <button className="btn-ghost p-1" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="max-h-[70vh] overflow-auto p-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-white/5 px-4 py-3">{footer}</div>}
+        {footer && <div className="flex justify-end gap-2 border-t border-border px-4 py-3">{footer}</div>}
       </div>
     </div>
   );

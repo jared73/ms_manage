@@ -98,7 +98,7 @@ export interface MarketItem {
 
 export interface AppSettings {
   language: "zh" | "en";
-  theme: "dark" | "light" | "system";
+  theme: "purple" | "midnight" | "forest" | "light";
   auto_launch: boolean;
   proxy_mode: "stdio" | "http";
   proxy_http_port?: number;

@@ -7,10 +7,10 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 1520,
     strictPort: true,
     host: "127.0.0.1",
-    hmr: { protocol: "ws", host: "127.0.0.1", port: 1421 },
+    hmr: { protocol: "ws", host: "127.0.0.1", port: 1521 },
     watch: {
       // 避免监听 src-tauri 内部
       ignored: ["**/src-tauri/**"],
