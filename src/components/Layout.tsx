@@ -24,8 +24,8 @@ export function Layout() {
   const { t } = useTranslation();
   return (
     <div className="flex h-screen w-screen overflow-hidden">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-white/5 bg-bg-subtle">
-        <div className="flex h-14 items-center gap-2 border-b border-white/5 px-4">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-bg-subtle">
+        <div className="flex h-14 items-center gap-2 border-b border-border px-4">
           <div className="grid h-8 w-8 place-items-center rounded-md bg-accent text-sm font-bold">AI</div>
           <div>
             <div className="text-sm font-semibold leading-tight">{t("app.title")}</div>
@@ -43,7 +43,7 @@ export function Layout() {
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                   isActive
                     ? "bg-accent/15 text-accent"
-                    : "text-fg-muted hover:bg-white/5 hover:text-fg",
+                    : "text-fg-muted hover:bg-overlay-soft hover:text-fg",
                 )
               }
             >
@@ -52,7 +52,7 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-white/5 p-3 text-[11px] text-fg-muted">
+        <div className="border-t border-border p-3 text-[11px] text-fg-muted">
           v0.1.0 · Tauri 2 + React
         </div>
       </aside>

@@ -48,7 +48,7 @@ export function Logs() {
           </div>
         }
       >
-        <div className="overflow-hidden rounded-lg border border-white/5">
+        <div className="overflow-hidden rounded-lg border border-border">
           <div className="max-h-[75vh] overflow-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-bg-subtle text-left text-xs uppercase text-fg-muted">
@@ -61,7 +61,7 @@ export function Logs() {
               </thead>
               <tbody>
                 {logs.map((l) => (
-                  <tr key={l.id} className="border-t border-white/5 hover:bg-white/[0.02]">
+                  <tr key={l.id} className="border-t border-border hover:bg-overlay-soft">
                     <td className="px-3 py-1.5 font-mono text-[11px] text-fg-muted whitespace-nowrap">{l.timestamp.slice(11, 19)}</td>
                     <td className="px-3 py-1.5">
                       <span className={

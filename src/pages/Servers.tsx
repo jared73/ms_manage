@@ -174,7 +174,7 @@ export function Servers() {
         {filtered.length === 0 ? (
           <EmptyHint>{t("common.empty")}</EmptyHint>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-white/5">
+          <div className="overflow-hidden rounded-lg border border-border">
             <table className="w-full text-sm">
               <thead className="bg-bg-subtle text-left text-xs uppercase text-fg-muted">
                 <tr>
@@ -191,7 +191,7 @@ export function Servers() {
                   const st = states[s.id];
                   const project = projects.find((p) => p.id === s.project_id);
                   return (
-                    <tr key={s.id} className="border-t border-white/5 hover:bg-white/[0.02]">
+                    <tr key={s.id} className="border-t border-border hover:bg-overlay-soft">
                       <td
                         className="px-3 py-2 cursor-pointer"
                         onClick={() => setViewing(s)}
@@ -337,7 +337,7 @@ function ProjectsModal({ onClose, onChanged }: { onClose: () => void; onChanged:
           <EmptyHint>{t("common.empty")}</EmptyHint>
         ) : (
           list.map((p) => (
-            <div key={p.id} className="flex items-center gap-2 rounded-md border border-white/5 bg-bg-subtle px-3 py-2">
+            <div key={p.id} className="flex items-center gap-2 rounded-md border border-border bg-bg-subtle px-3 py-2">
               <div className="flex-1">
                 <div className="font-medium">{p.name}</div>
                 {p.description && <div className="text-xs text-fg-muted">{p.description}</div>}
@@ -661,7 +661,7 @@ function ImportJsonModal({ onClose, onImported }: { onClose: () => void; onImpor
         {parsed && parsed.length > 0 && (
           <div className="space-y-2">
             <div className="text-sm text-fg-muted">预览（{parsed.length} 个 server）：</div>
-            <div className="max-h-48 space-y-1 overflow-auto rounded border border-white/5 bg-bg-subtle p-2">
+            <div className="max-h-48 space-y-1 overflow-auto rounded border border-border bg-bg-subtle p-2">
               {parsed.map(({ name, conf }) => {
                 const c = conf as any;
                 const t = c.type === "http" ? "http" : c.type === "sse" ? "sse" : "stdio";
@@ -669,7 +669,7 @@ function ImportJsonModal({ onClose, onImported }: { onClose: () => void; onImpor
                   ? `${c.command ?? ""} ${(c.args ?? []).join(" ")}`.trim()
                   : `${c.url ?? ""}`;
                 return (
-                  <div key={name} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-white/5">
+                  <div key={name} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-overlay-soft">
                     <span className="badge-mute">{t}</span>
                     <span className="font-medium">{name}</span>
                     <code className="flex-1 truncate text-xs text-fg-muted">{summary}</code>
@@ -740,12 +740,12 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
   }, [tab]);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-overlay backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-full max-w-2xl rounded-lg border border-white/10 bg-bg-elev shadow-2xl max-h-[85vh] flex flex-col"
+        className="w-full max-w-2xl rounded-lg border border-border bg-bg-elev shadow-2xl max-h-[85vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
             <h2 className="text-base font-semibold">{server.name}</h2>
             {server.description && <div className="text-xs text-fg-muted">{server.description}</div>}
@@ -754,7 +754,7 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
         </div>
 
         {/* tabs */}
-        <div className="flex border-b border-white/5 px-2">
+        <div className="flex border-b border-border px-2">
           <button
             className={`px-3 py-2 text-sm ${tab === "general" ? "border-b-2 border-accent text-fg" : "text-fg-muted hover:text-fg"}`}
             onClick={() => setTab("general")}
@@ -786,7 +786,7 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
                   } />
                   {server.cwd && <DetailRow k="工作目录" v={<code className="text-xs">{server.cwd}</code>} />}
                   {server.env && Object.keys(server.env).length > 0 && (
-                    <div className="rounded-md border border-white/10 bg-bg-subtle p-3">
+                    <div className="rounded-md border border-border bg-bg-subtle p-3">
                       <div className="mb-1 text-xs text-fg-muted">环境变量</div>
                       <div className="space-y-1">
                         {Object.entries(server.env).map(([k, v]) => (
@@ -804,7 +804,7 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
                 <>
                   <DetailRow k="URL" v={<code className="text-xs break-all">{server.url ?? "—"}</code>} />
                   {server.headers && Object.keys(server.headers).length > 0 && (
-                    <div className="rounded-md border border-white/10 bg-bg-subtle p-3">
+                    <div className="rounded-md border border-border bg-bg-subtle p-3">
                       <div className="mb-1 text-xs text-fg-muted">请求头</div>
                       <div className="space-y-1">
                         {Object.entries(server.headers).map(([k, v]) => (
@@ -850,13 +850,13 @@ function ServerDetailDrawer({ server, onClose, onChanged }: {
                 {tools?.map((t) => {
                   const enabled = !localDisabled.has(t.name);
                   return (
-                    <div key={t.name} className={`flex items-start gap-2 rounded-md border px-3 py-2 ${enabled ? "border-white/10 bg-bg-subtle" : "border-white/5 bg-bg-subtle/40 opacity-60"}`}>
+                    <div key={t.name} className={`flex items-start gap-2 rounded-md border px-3 py-2 ${enabled ? "border-border bg-bg-subtle" : "border-border bg-bg-subtle/40 opacity-60"}`}>
                       <button
                         onClick={() => toggleTool(t.name, !enabled)}
-                        className={`relative mt-1 h-5 w-9 shrink-0 rounded-full transition-colors ${enabled ? "bg-accent" : "bg-white/10"}`}
+                        className={`relative mt-1 h-5 w-9 shrink-0 rounded-full transition-colors ${enabled ? "bg-accent" : "bg-overlay-soft"}`}
                         title={enabled ? "已启用" : "已禁用"}
                       >
-                        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${enabled ? "left-4" : "left-0.5"}`} />
+                        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${enabled ? "left-4" : "left-0.5"}`} />
                       </button>
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium">{t.name}</div>

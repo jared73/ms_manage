@@ -5,21 +5,27 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "#0f1115",
-          subtle: "#161922",
-          elev: "#1c2030",
+          DEFAULT: "rgb(var(--bg) / <alpha-value>)",
+          subtle: "rgb(var(--bg-subtle) / <alpha-value>)",
+          elev: "rgb(var(--bg-elev) / <alpha-value>)",
         },
         fg: {
-          DEFAULT: "#e6e8ef",
-          muted: "#9aa0b0",
+          DEFAULT: "rgb(var(--fg) / <alpha-value>)",
+          muted: "rgb(var(--fg-muted) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: "#7c5cff",
-          hover: "#6a4cf0",
+          DEFAULT: "rgb(var(--accent) / <alpha-value>)",
+          hover: "rgb(var(--accent-hover) / <alpha-value>)",
         },
-        ok: "#22c55e",
-        warn: "#f59e0b",
-        err: "#ef4444",
+        ok: "rgb(var(--ok) / <alpha-value>)",
+        warn: "rgb(var(--warn) / <alpha-value>)",
+        err: "rgb(var(--err) / <alpha-value>)",
+        // border 与 overlay 默认带主题相关 alpha
+        border: "rgb(var(--border) / var(--border-alpha))",
+        overlay: {
+          DEFAULT: "rgb(var(--overlay) / var(--overlay-alpha))",
+          soft: "rgb(var(--overlay-soft) / var(--overlay-soft-alpha))",
+        },
       },
       fontFamily: {
         sans: ["system-ui", "Microsoft YaHei", "Segoe UI", "sans-serif"],
