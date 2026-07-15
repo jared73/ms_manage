@@ -155,6 +155,10 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     if srv.transport != "stdio" {
         anyhow::bail!("proxy currently only supports stdio children, got '{}'", srv.transport);
     }
+    // 依赖包管理器（npx/uvx 等）的 server 必须先预装，避免每次启动临时下载
+    if crate::cmd_install::detect_pkg(srv).is_some() && !srv.installed {
+        anyhow::bail!("此 server 需要先预装包，请在「服务」页面点击「安装」按钮（依赖包：{}）", srv.command.as_deref().unwrap_or(""));
+    }
     let cmd_str = srv.command.as_deref().ok_or_else(|| anyhow::anyhow!("command is required"))?;
     if cmd_str.trim().is_empty() {
         anyhow::bail!("command 字段为空，请在编辑对话框中填写可执行文件路径（如 npx、uvx、python 等）");
@@ -331,6 +335,9 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     if s.transport != "stdio" {
         return Err(format!("only stdio is supported ({} transport)", s.transport));
     }
+    if crate::cmd_install::detect_pkg(s).is_some() && !s.installed {
+        return Err(format!("请先在「服务」页面点击「安装」（依赖包管理器：{}）", s.command.as_deref().unwrap_or("")));
+    }
     let cmd_str = s.command.as_deref().filter(|c| !c.is_empty())
         .ok_or_else(|| "command is empty".to_string())?;
     let resolved = crate::process_util::resolve_cmd(cmd_str);
@@ -405,6 +412,9 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
 pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     if s.transport != "stdio" {
         return Ok(serde_json::json!({ "ok": false, "error": format!("only stdio is testable in MVP ({} transport)", s.transport) }));
+    }
+    if crate::cmd_install::detect_pkg(s).is_some() && !s.installed {
+        return Ok(serde_json::json!({ "ok": false, "error": "请先在「服务」页面点击「安装」" }));
     }
     let cmd_str = match s.command.as_deref() {
         Some(c) if !c.is_empty() => c,

@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod cmd_app;
+pub mod cmd_install;
 pub mod cmd_logs;
 pub mod cmd_market;
 pub mod cmd_projects;
@@ -141,6 +142,9 @@ pub fn run() {
             cmd_servers::test_server,
             cmd_servers::fetch_server_tools,
             cmd_servers::set_tool_enabled,
+            cmd_install::install_server,
+            cmd_install::uninstall_server,
+            cmd_install::refresh_install_status,
             cmd_projects::list_projects,
             cmd_projects::upsert_project,
             cmd_projects::delete_project,
@@ -162,6 +166,7 @@ pub fn run() {
             cmd_settings::get_settings,
             cmd_settings::update_settings,
             cmd_settings::regenerate_token,
+            cmd_settings::rewrite_client_configs,
             cmd_settings::is_autostart_enabled,
             cmd_settings::enable_autostart,
             cmd_settings::disable_autostart,

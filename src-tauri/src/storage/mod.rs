@@ -50,6 +50,23 @@ pub struct StoredServer {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+
+    // ---- 预安装（包管理）状态 ----
+    /// 是否已预装到本地（全局 npm / uv tool）。非 stdio 类型或直接二进制类型无需安装。
+    #[serde(default)]
+    pub installed: bool,
+    /// 已安装的版本号字符串（如 "1.2.3" 或 "2026.6.20"）
+    #[serde(default)]
+    pub installed_version: Option<String>,
+    /// 已安装的可执行文件绝对路径（启动时优先用这个，避免每次 npx 下载）
+    #[serde(default)]
+    pub installed_path: Option<String>,
+    /// 安装时间（ISO8601）
+    #[serde(default)]
+    pub installed_at: Option<String>,
+    /// 上次安装失败原因（None = 上次成功或从未尝试）
+    #[serde(default)]
+    pub install_error: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -71,6 +88,9 @@ pub struct StoredSkill {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// skill 目录下相对 SKILL.md 的所有文件路径（用于前端展示目录结构）
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

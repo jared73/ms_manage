@@ -245,6 +245,39 @@ pub async fn install_market_item(
     }
 }
 
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+fn decompress_tar_gz(bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
+    let gz = flate2::read::GzDecoder::new(bytes);
+    let mut archive = tar::Archive::new(gz);
+    archive.unpack(dest).map_err(|e| format!("unpack failed: {e}"))
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("create dir failed: {e}"))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("read dir failed: {e}"))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let dest = dst.join(&name);
+        if path.is_dir() {
+            copy_dir_all(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest).map_err(|e| format!("copy file failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str) -> Result<(), String> {
     let dir = state.storage.skills_dir();
     let skill_dir = dir.join(sanitize_id(id));
@@ -259,46 +292,83 @@ async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str
         .unwrap_or_default();
 
     // 按 id 自动选 repo + 路径：
-    //   frontend-design → anthropics/claude-plugins-official/plugins/<id>/skills/<id>/SKILL.md
-    //   grill-me         → mattpocock/skills/skills/productivity/<id>/SKILL.md
-    //   superpower        → obra/superpowers/skills/<id>/SKILL.md
-    let url = match id {
-        "frontend-design" => format!(
-            "https://api.github.com/repos/{}/contents/plugins/{}/skills/{}/SKILL.md",
-            ANTHROPIC_SKILLS_REPO, id, id
+    //   frontend-design → anthropics/claude-plugins-official/plugins/<id>/skills/<id>/
+    //   grill-me         → mattpocock/skills/skills/productivity/<id>/
+    //   superpower        → obra/superpowers/skills/using-superpowers/
+    let (repo, path, branch) = match id {
+        "frontend-design" => (
+            ANTHROPIC_SKILLS_REPO,
+            format!("plugins/{}/skills/{}", id, id),
+            "main",
         ),
-        "grill-me" => format!(
-            "https://api.github.com/repos/mattpocock/skills/contents/skills/productivity/{}/SKILL.md",
-            id
+        "grill-me" => (
+            "mattpocock/skills",
+            format!("skills/productivity/{}", id),
+            "main",
         ),
-        "superpower" => format!(
-            "https://api.github.com/repos/obra/superpowers/contents/skills/using-superpowers/SKILL.md"
+        "superpower" => (
+            "obra/superpowers",
+            "skills/using-superpowers".to_string(),
+            "main",
         ),
-        "create-skill" => format!(
-            "https://api.github.com/repos/alexanderop/claude-code-builder/contents/commands/{}.md",
-            id
+        "create-skill" => (
+            "alexanderop/claude-code-builder",
+            format!("commands/{}", id),
+            "main",
         ),
-        _ => format!(
-            "https://api.github.com/repos/{}/contents/plugins/{}/skills/{}/SKILL.md",
-            ANTHROPIC_SKILLS_REPO, id, id
+        _ => (
+            ANTHROPIC_SKILLS_REPO,
+            format!("plugins/{}/skills/{}", id, id),
+            "main",
         ),
     };
+
+    // 下载仓库 tarball（包含完整目录）
+    let url = format!("https://api.github.com/repos/{}/tarball/{}", repo, percent_encode(branch));
     let client = reqwest::Client::builder()
         .user_agent("ms-manage/0.1.0")
         .build()
         .map_err(|e| format!("HTTP client failed: {e}"))?;
     let mut req = client.get(&url)
-        .header("Accept", "application/vnd.github.v3.raw");
+        .header("Accept", "application/vnd.github.v3+json");
     if !github_token.is_empty() {
         req = req.header("Authorization", format!("Bearer {github_token}"));
     }
     let resp = req.send().await
-        .map_err(|e| format!("download SKILL.md failed: {e}"))?;
+        .map_err(|e| format!("download repo tarball failed: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("download SKILL.md failed: HTTP {}", resp.status()));
+        return Err(format!("download repo tarball failed: HTTP {}", resp.status()));
     }
-    let content = resp.text().await.map_err(|e| format!("read failed: {e}"))?;
-    std::fs::write(&file, &content).map_err(|e| e.to_string())?;
+    let bytes = resp.bytes().await.map_err(|e| format!("read tarball failed: {e}"))?;
+
+    // 解压到临时目录
+    let temp = std::env::temp_dir().join(format!("ms-manage-skill-{}-{}", id, uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    decompress_tar_gz(&bytes, &temp)?;
+
+    // GitHub tarball 顶层是 owner-repo-sha/，找到它
+    let root: std::path::PathBuf = std::fs::read_dir(&temp)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.is_dir())
+        .ok_or_else(|| "tarball root directory not found".to_string())?;
+
+    // 定位到仓库内的 skill 子目录
+    let source = root.join(&path);
+    if !source.exists() {
+        return Err(format!("skill directory not found in repo: {}", path));
+    }
+    if !source.join(crate::storage::skills::SKILL_FILE).exists() {
+        return Err(format!("SKILL.md not found in downloaded directory: {}", source.display()));
+    }
+
+    // 把完整目录内容复制到 skills/<id>/
+    copy_dir_all(&source, &skill_dir)?;
+
+    // 清理临时目录
+    let _ = std::fs::remove_dir_all(&temp);
+
     let _ = crate::storage::skills::reconcile_after_change(&state.storage);
     Ok(())
 }
@@ -324,6 +394,8 @@ fn install_market_server(state: &AppState, id: &str) -> Result<(), String> {
         headers: std::collections::HashMap::new(), bearer_token: None,
         enabled: true, auto_start: Some(false), tags, project_id: None,
         disabled_tools: Vec::new(), created_at: now.clone(), updated_at: now,
+        installed: false, installed_version: None, installed_path: None,
+        installed_at: None, install_error: None,
     });
     state.storage.save_servers(&list).map_err(|e| e.to_string())
 }

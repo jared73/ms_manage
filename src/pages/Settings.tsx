@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Save, FolderOpen, RefreshCw, Power } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, enableAutostart, disableAutostart, isAutostartEnabled } from "@/lib/ipc";
+import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled } from "@/lib/ipc";
 import type { AppSettings } from "@/lib/ipc";
 import { useApp, type ThemeName } from "@/stores/app";
 
@@ -61,7 +61,8 @@ export function Settings() {
     try {
       const newToken = await regenerateToken();
       setSettings({ ...settings!, mcp_token: newToken });
-      toast.success("Token 已重置");
+      const written = await rewriteClientConfigs(true);
+      toast.success(`Token 已重置，已更新 ${written.join("、")} 配置`);
     } catch (e) {
       toast.error(`重置失败: ${e}`);
     }

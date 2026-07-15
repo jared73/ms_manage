@@ -12,7 +12,10 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:debug": "tauri build --debug",
-    "lint": "eslint . --ext .ts,.tsx"
+    "lint": "eslint . --ext .ts,.tsx",
+    "cli:build": "tsc -p packages/cli/tsconfig.json",
+    "cli:test": "node packages/cli/e2e/run.mjs",
+    "cli:pack": "cd packages/cli && npm pack"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

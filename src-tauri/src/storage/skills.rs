@@ -106,6 +106,7 @@ fn parse_dir(path: &Path) -> Result<StoredSkill> {
         .and_then(|d| chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0))
         .map(|dt| dt.to_rfc3339())
         .unwrap_or_default();
+    let files = list_files_relative(path);
     Ok(StoredSkill {
         id,
         name: display_name,
@@ -116,6 +117,7 @@ fn parse_dir(path: &Path) -> Result<StoredSkill> {
         enabled,
         created_at: mtime.clone(),
         updated_at: mtime,
+        files,
     })
 }
 
@@ -228,6 +230,34 @@ pub fn reconcile_after_change(storage: &super::Storage) -> Result<()> {
 
 fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+}
+
+/// 列出 skill 目录下所有文件的相对路径（按字典序，不包含目录本身）
+fn list_files_relative(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(current) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') { continue; }
+            if p.is_dir() {
+                walk(base, &p, out);
+            } else {
+                match p.strip_prefix(base) {
+                    Ok(rel) => {
+                        if let Some(s) = rel.to_str() {
+                            out.push(s.replace('\\', "/"));
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+    walk(dir, dir, &mut files);
+    files.sort();
+    files
 }
 
 /// （旧版 API，保留兼容）

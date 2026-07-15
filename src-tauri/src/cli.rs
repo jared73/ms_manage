@@ -86,6 +86,7 @@ pub fn print_help() {
     println!("  ms_manage proxy http [--port N]            启动 HTTP MCP 代理（带 MCPR_TOKEN 鉴权）;");
     println!("  ms_manage connect [target]                 一键接入各种 AI 客户端（学 mcp-router）;");
     println!("                                               target: claude-code | cursor | cline | windsurf | vscode | qoder | print");
+    println!("                                               加 npx- 前缀使用 npx 模式，例如 npx-claude-code | npx-qoder | npx-print");
     println!("  ms_manage market-install <id>              安装市场 item");
     println!("  ms_manage skills list                      列出所有 skill");
     println!("  ms_manage skills reconcile                 手动触发 symlink 同步");
@@ -171,6 +172,35 @@ pub fn connect(target: Option<String>) {
     let host = "127.0.0.1";
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "ms_manage.exe".into());
 
+    fn local_cfg(exe: &str, token: &str) -> serde_json::Value {
+        serde_json::json!({
+            "mcpServers": {
+                "ms-manage": {
+                    "command": exe,
+                    "args": ["serve"],
+                    "env": { "MCPR_TOKEN": token }
+                }
+            }
+        })
+    }
+
+    fn npx_cfg(host: &str, port: u16, token: &str) -> serde_json::Value {
+        let mut env = serde_json::Map::new();
+        env.insert("MS_MANAGE_URL".into(), serde_json::Value::String(format!("http://{host}:{port}/mcp")));
+        if !token.is_empty() {
+            env.insert("MS_MANAGE_TOKEN".into(), serde_json::Value::String(token.into()));
+        }
+        serde_json::json!({
+            "mcpServers": {
+                "ms-manage": {
+                    "command": "npx",
+                    "args": ["-y", "@ms-manage/cli@latest", "connect"],
+                    "env": serde_json::Value::Object(env)
+                }
+            }
+        })
+    }
+
     let target = target.unwrap_or_else(|| "print".into());
     match target.as_str() {
         "print" | "" => {
@@ -189,133 +219,103 @@ pub fn connect(target: Option<String>) {
             println!("  ms_manage connect vscode        输出 VS Code .vscode/mcp.json 片段");
             println!("  ms_manage connect qoder         写入 %APPDATA%\\Qoder\\SharedClientCache\\mcp.json (Qoder IDE)");
             println!("  ms_manage connect claude-desktop 写入 %APPDATA%\\Claude\\claude_desktop_config.json (Claude Desktop)");
+            println!();
+            println!("npx 模式（客户端机器无需安装 MS Manage 主程序，只需 Node.js 18+）:");
+            println!("  ms_manage connect npx-claude-code   写入 ~/.claude/mcp_servers.json (npx 模式)");
+            println!("  ms_manage connect npx-cursor        写入 ~/.cursor/mcp.json (npx 模式)");
+            println!("  ms_manage connect npx-cline         输出 Cline npx 配置");
+            println!("  ms_manage connect npx-windsurf      写入 ~/.codeium/windsurf/mcp_config.json (npx 模式)");
+            println!("  ms_manage connect npx-vscode        输出 VS Code npx 配置片段");
+            println!("  ms_manage connect npx-qoder         写入 %APPDATA%\\Qoder\\SharedClientCache\\mcp.json (npx 模式)");
+            println!("  ms_manage connect npx-print         打印上方 npx 配置示例");
         }
-        "claude-code" => {
-            // stdio 模式：Claude Code spawn ms_manage.exe serve
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "mcpServers": {
-                    "ms-manage": {
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
+        "npx-claude-code" => {
+            let cfg = npx_cfg(host, port, &token);
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
             let p = home.join(".claude").join("mcp_servers.json");
             if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
-            println!("。Wrote {} (stdio 模式)", p.display());
+            println!("Wrote {} (npx 模式)", p.display());
         }
-        "cursor" => {
-            // stdio 模式
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "mcpServers": {
-                    "ms-manage": {
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
+        "claude-code" => {
+            let cfg = local_cfg(&exe, &token);
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let p = home.join(".claude").join("mcp_servers.json");
+            if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
+            println!("Wrote {} (stdio 模式)", p.display());
+        }
+        "npx-cursor" => {
+            let cfg = npx_cfg(host, port, &token);
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
             let p = home.join(".cursor").join("mcp.json");
             if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
-            println!("。Wrote {} (stdio 模式)", p.display());
+            println!("Wrote {} (npx 模式)", p.display());
         }
-        "cline" => {
-            // stdio 模式
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "mcpServers": {
-                    "ms-manage": {
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
-            println!("Cline 配置（stdio 模式，写。cline_mcp_settings.json）：");
+        "cursor" => {
+            let cfg = local_cfg(&exe, &token);
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let p = home.join(".cursor").join("mcp.json");
+            if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
+            println!("Wrote {} (stdio 模式)", p.display());
+        }
+        "npx-cline" => {
+            let cfg = npx_cfg(host, port, &token);
+            println!("Cline 配置（npx 模式，写 .cline_mcp_settings.json）：");
             println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
         }
-        "windsurf" => {
-            // stdio 模式
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "mcpServers": {
-                    "ms-manage": {
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
+        "cline" => {
+            let cfg = local_cfg(&exe, &token);
+            println!("Cline 配置（stdio 模式，写 .cline_mcp_settings.json）：");
+            println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
+        }
+        "npx-windsurf" => {
+            let cfg = npx_cfg(host, port, &token);
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
             let p = home.join(".codeium").join("windsurf").join("mcp_config.json");
             if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
-            println!("。Wrote {} (stdio 模式)", p.display());
+            println!("Wrote {} (npx 模式)", p.display());
+        }
+        "windsurf" => {
+            let cfg = local_cfg(&exe, &token);
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            let p = home.join(".codeium").join("windsurf").join("mcp_config.json");
+            if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
+            println!("Wrote {} (stdio 模式)", p.display());
+        }
+        "npx-vscode" => {
+            let cfg = npx_cfg(host, port, &token);
+            println!("VS Code 配置（npx 模式，写 .vscode/mcp.json）：");
+            println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
         }
         "vscode" => {
-            // stdio 模式
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "servers": {
-                    "ms-manage": {
-                        "type": "stdio",
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
-            println!("VS Code 配置（stdio 模式，写。.vscode/mcp.json）：");
+            let cfg = local_cfg(&exe, &token);
+            println!("VS Code 配置（stdio 模式，写 .vscode/mcp.json）：");
             println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
         }
         "claude-desktop" => {
             eprintln!("claude-desktop target no longer supported (Claude Desktop integration removed)");
             std::process::exit(2);
-            // 注释保留：原 claude_legacy 写文件路。            // let storage = &state.storage;
-            // if let Err(e) = crate::claude_legacy::export(storage, "proxy") {
-            //     eprintln!("export failed: {e}");
-            //     std::process::exit(1);
-            // }
-            // println!("。已写。Claude Desktop 配置（代理模式）");
         }
-        "qoder" => {
-            // Qoder 。%APPDATA%\Qoder\SharedClientCache\mcp.json
+        "npx-qoder" => {
             let appdata = std::env::var("APPDATA").unwrap_or_default();
             let p = std::path::PathBuf::from(&appdata)
                 .join("Qoder").join("SharedClientCache").join("mcp.json");
             if let Some(parent) = p.parent() { std::fs::create_dir_all(parent).ok(); }
-            // 。mcp-router：stdio 模式（最稳，所。client 都支持）
-            // command: ms_manage.exe 绝对路径
-            // args: ["serve"] —。stdio MCP server 模式
-            // env: { MCPR_TOKEN: ... } —。鉴权
-            let exe = std::env::current_exe()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "ms_manage.exe".into());
-            let cfg = serde_json::json!({
-                "mcpServers": {
-                    "ms-manage": {
-                        "command": exe,
-                        "args": ["serve"],
-                        "env": { "MCPR_TOKEN": token }
-                    }
-                }
-            });
+            let cfg = npx_cfg(host, port, &token);
             if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
-            println!("。Wrote {} (stdio 模式)", p.display());
+            println!("Wrote {} (npx 模式)", p.display());
+        }
+        "qoder" => {
+            let appdata = std::env::var("APPDATA").unwrap_or_default();
+            let p = std::path::PathBuf::from(&appdata)
+                .join("Qoder").join("SharedClientCache").join("mcp.json");
+            if let Some(parent) = p.parent() { std::fs::create_dir_all(parent).ok(); }
+            let cfg = local_cfg(&exe, &token);
+            if let Err(e) = write_json(&p, &cfg) { eprintln!("write failed: {e}"); std::process::exit(1); }
+            println!("Wrote {} (stdio 模式)", p.display());
+        }
+        "npx-print" => {
+            let cfg = npx_cfg(host, port, &token);
+            println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
         }
         other => {
             eprintln!("unknown target: {other}\nRun `ms_manage connect` to see available targets.");
@@ -323,7 +323,6 @@ pub fn connect(target: Option<String>) {
         }
     }
     // 帮助提示：先启动 HTTP 代理
-    let _ = exe; // suppress unused warning
     eprintln!();
     eprintln!("提示：先启动代理（ms_manage proxy http），再启动目标客户端。");
 }
@@ -332,6 +331,88 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) -> std::io::Res
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     let s = serde_json::to_string_pretty(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     std::fs::write(path, s)
+}
+
+/// 把当前连接配置写入所有支持的客户端配置文件。
+/// `use_npx` 为 true 时写入 npx 配置，false 时写入本地 exe 配置。
+/// 返回写入成功的目标列表，失败的目标会打印到 stderr 但不中断。
+pub fn write_all_client_configs(use_npx: bool) -> Vec<String> {
+    use crate::state::AppState;
+    let state = match AppState::initialize() {
+        Ok(s) => s,
+        Err(e) => { eprintln!("init failed: {e}"); return Vec::new(); }
+    };
+    let settings = match state.storage.load_settings() {
+        Ok(s) => s,
+        Err(e) => { eprintln!("load settings: {e}"); return Vec::new(); }
+    };
+    let token = settings.mcp_token.clone().unwrap_or_default();
+    let port = settings.proxy_http_port;
+    let host = "127.0.0.1";
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "ms_manage.exe".into());
+
+    fn local_cfg(exe: &str, token: &str) -> serde_json::Value {
+        serde_json::json!({
+            "mcpServers": {
+                "ms-manage": {
+                    "command": exe,
+                    "args": ["serve"],
+                    "env": { "MCPR_TOKEN": token }
+                }
+            }
+        })
+    }
+
+    fn npx_cfg(host: &str, port: u16, token: &str) -> serde_json::Value {
+        let mut env = serde_json::Map::new();
+        env.insert("MS_MANAGE_URL".into(), serde_json::Value::String(format!("http://{host}:{port}/mcp")));
+        if !token.is_empty() {
+            env.insert("MS_MANAGE_TOKEN".into(), serde_json::Value::String(token.into()));
+        }
+        serde_json::json!({
+            "mcpServers": {
+                "ms-manage": {
+                    "command": "npx",
+                    "args": ["-y", "@ms-manage/cli@latest", "connect"],
+                    "env": serde_json::Value::Object(env)
+                }
+            }
+        })
+    }
+
+    let cfg = if use_npx { npx_cfg(host, port, &token) } else { local_cfg(&exe, &token) };
+    let mut written = Vec::new();
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let targets: Vec<(&str, std::path::PathBuf)> = vec![
+        ("claude-code", home.join(".claude").join("mcp_servers.json")),
+        ("cursor",      home.join(".cursor").join("mcp.json")),
+        ("windsurf",    home.join(".codeium").join("windsurf").join("mcp_config.json")),
+    ];
+
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let qoder_path = std::path::PathBuf::from(&appdata)
+        .join("Qoder").join("SharedClientCache").join("mcp.json");
+
+    for (name, path) in targets {
+        if let Err(e) = write_json(&path, &cfg) {
+            eprintln!("write {name} config failed: {e}");
+        } else {
+            written.push(name.to_string());
+        }
+    }
+
+    if let Some(parent) = qoder_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if let Err(e) = write_json(&qoder_path, &cfg) {
+        eprintln!("write qoder config failed: {e}");
+    } else {
+        written.push("qoder".to_string());
+    }
+
+    let _ = exe; // suppress unused warning when use_npx is true
+    written
 }
 
 /// `ms_manage diagnose` —— 检查常见 MCP server 依赖是否可用

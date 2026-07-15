@@ -27,6 +27,12 @@ export interface McpServer {
   disabled_tools?: string[];
   created_at: string;
   updated_at: string;
+  // 预安装状态（包管理）
+  installed?: boolean;
+  installed_version?: string | null;
+  installed_path?: string | null;
+  installed_at?: string | null;
+  install_error?: string | null;
 }
 
 export interface McpTool {
@@ -65,6 +71,7 @@ export interface Skill {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  files?: string[];           // skill 目录下相对文件列表
 }
 
 export interface LogEntry {
@@ -121,6 +128,16 @@ export const stopServer = (id: string) => invoke<void>("stop_server", { id });
 export const testServer = (id: string) => invoke<{ ok: boolean; latency_ms?: number; tools?: unknown[]; error?: string }>("test_server", { id });
 export const fetchServerTools = (id: string) => invoke<{ name: string; description?: string; inputSchema?: unknown }[]>("fetch_server_tools", { id });
 export const setToolEnabled = (id: string, toolName: string, enabled: boolean) => invoke<void>("set_tool_enabled", { id, toolName, enabled });
+
+// ---- 安装 / 卸载（预装包到本地）----
+export interface InstallProgressEvent {
+  id: string;
+  stage: "checking" | "installing" | "resolving" | "done" | "error";
+  message: string;
+}
+export const installServer = (id: string) => invoke<void>("install_server", { id });
+export const uninstallServer = (id: string) => invoke<void>("uninstall_server", { id });
+export const refreshInstallStatus = (id: string) => invoke<McpServer>("refresh_install_status", { id });
 
 // ---- Project ----
 export const listProjects = () => invoke<Project[]>("list_projects");
@@ -193,6 +210,7 @@ export const clearLogs = () => invoke<void>("clear_logs");
 export const getSettings = () => invoke<AppSettings>("get_settings");
 export const updateSettings = (settings: AppSettings) => invoke<void>("update_settings", { settings });
 export const regenerateToken = () => invoke<string>("regenerate_token");
+export const rewriteClientConfigs = (useNpx: boolean = true) => invoke<string[]>("rewrite_client_configs", { useNpx });
 export const enableAutostart = () => invoke<void>("enable_autostart");
 export const disableAutostart = () => invoke<void>("disable_autostart");
 export const isAutostartEnabled = () => invoke<boolean>("is_autostart_enabled");

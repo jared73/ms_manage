@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch } from "lucide-react";
+import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File } from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";
 import { Modal } from "@/components/Modal";
 import { toast } from "sonner";
@@ -112,8 +112,8 @@ export function Skills() {
         title={t("skills.title")}
         action={
           <div className="flex gap-2">
-            <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title="从 .zip / .tar.gz 导入">
-              <Upload size={14}/>导入压缩包
+            <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title="从 ZIP / 压缩包安装完整 skill">
+              <Upload size={14}/>从 ZIP 安装
             </button>
             <button className="btn-ghost" onClick={() => openDataDir()} title="打开数据目录">
               <FolderOpen size={14}/>数据目录
@@ -132,6 +132,18 @@ export function Skills() {
                   <div className="min-w-0">
                     <div className="truncate font-semibold">{s.name}</div>
                     {s.description && <div className="line-clamp-2 text-xs text-fg-muted">{s.description}</div>}
+                    {s.files && s.files.length > 0 && (
+                      <div className="mt-2 rounded-md bg-bg-subtle px-2 py-1.5 text-[11px] text-fg-muted">
+                        <div className="mb-1 flex items-center gap-1 font-medium text-fg">
+                          <File size={11}/> 文件列表 ({s.files.length})
+                        </div>
+                        <ul className="max-h-24 space-y-0.5 overflow-auto pl-1">
+                          {s.files.map((f) => (
+                            <li key={f} className="truncate font-mono text-[10px]">{f}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                   <span className={s.enabled ? "badge-ok" : "badge-mute"}>
                     {s.enabled ? t("common.enabled") : t("common.disabled")}

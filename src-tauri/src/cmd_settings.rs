@@ -122,3 +122,11 @@ pub fn regenerate_token(state: State<'_, Arc<AppState>>) -> Result<String, Strin
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
     Ok(new_token)
 }
+
+/// 用当前 token 重写所有支持的客户端配置文件。
+/// `use_npx` 为 true 时写 npx 配置，false 时写本地 exe 配置。
+/// 返回成功写入的客户端名称列表。
+#[tauri::command]
+pub fn rewrite_client_configs(use_npx: bool) -> Result<Vec<String>, String> {
+    Ok(crate::cli::write_all_client_configs(use_npx))
+}

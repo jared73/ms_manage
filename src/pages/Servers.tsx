@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Play, Square, RefreshCw, TestTube2, FolderOpen, Loader2, FileInput, FileDown, X } from "lucide-react";
+import { Plus, Trash2, Pencil, Play, Square, RefreshCw, TestTube2, FolderOpen, Loader2, FileInput, FileDown, X, Download, PackageCheck, PackageOpen, Unplug, FileJson } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -9,9 +10,10 @@ import {
   listServers, listServerStates, upsertServer, deleteServer,
   startServer, stopServer, testServer,
   fetchServerTools, setToolEnabled,
+  installServer, uninstallServer, refreshInstallStatus,
   listProjects, upsertProject, deleteProject,
 } from "@/lib/ipc";
-import type { McpServer, ServerState, Transport, Project, McpTool } from "@/lib/ipc";
+import type { McpServer, ServerState, Transport, Project, McpTool, InstallProgressEvent } from "@/lib/ipc";
 
 export function Servers() {
   const { t } = useTranslation();
@@ -44,6 +46,64 @@ export function Servers() {
 
   const [startingIds, setStartingIds] = useState<Set<string>>(new Set());
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
+  const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
+  const [uninstallingIds, setUninstallingIds] = useState<Set<string>>(new Set());
+  // 当前每个 server 的安装进度文本（来自 install_progress 事件）
+  const [installProgress, setInstallProgress] = useState<Record<string, { stage: string; message: string }>>({});
+  // 批量安装状态：null = 不在跑
+  const [batch, setBatch] = useState<{
+    pending: string[];        // 剩余待装 server id 列表
+    current: string | null;   // 当前正在装的 server id
+    done: number;             // 已完成数（成功 + 失败都算）
+    total: number;            // 总数
+    succeeded: string[];      // 成功的 name
+    failed: { name: string; msg: string }[];
+  } | null>(null);
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+
+  // 订阅 install_progress 事件
+  // ref 存批量安装时等待 done/error 的 resolver
+  const progressResolversRef = useRef<Map<string, (r: { ok: boolean; message: string }) => void>>(new Map());
+
+  useEffect(() => {
+    const unlisten = listen<InstallProgressEvent>("install_progress", (e) => {
+      const { id, stage, message } = e.payload;
+      setInstallProgress((prev) => ({ ...prev, [id]: { stage, message } }));
+      // 终态时清掉 installingIds 并刷新数据
+      if (stage === "done" || stage === "error") {
+        setInstallingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+        setUninstallingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+        if (stage === "done") {
+          toast.success(message, { id: `install-${id}` });
+        } else {
+          toast.error(message, { id: `install-${id}` });
+        }
+        // 通知批量等待中的 await
+        const resolver = progressResolversRef.current.get(id);
+        if (resolver) {
+          resolver({ ok: stage === "done", message });
+          progressResolversRef.current.delete(id);
+        }
+        void load();
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  /** 等待指定 server 触发的安装事件走到 done / error */
+  const waitForInstallDone = (id: string): Promise<{ ok: boolean; message: string }> => {
+    return new Promise((resolve) => {
+      progressResolversRef.current.set(id, resolve);
+    });
+  };
+
+  // 判断一条 server 是否需要预装（command 是 npx/uvx 等包管理器）
+  const needsInstall = (s: McpServer): boolean => {
+    if (s.transport !== "stdio") return false;
+    const cmd = (s.command ?? "").toLowerCase();
+    if (!cmd) return false;
+    return ["npx", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx", "uvx", "uv"].includes(cmd);
+  };
 
   const handleDelete = async (s: McpServer) => {
     try {
@@ -71,6 +131,10 @@ export function Servers() {
   };
 
   const handleStart = async (s: McpServer) => {
+    if (needsInstall(s) && !s.installed) {
+      toast.error(`请先安装 ${s.name}（依赖包管理器预装）`);
+      return;
+    }
     setStartingIds((prev) => new Set(prev).add(s.id));
     toast.loading(`正在启动 ${s.name}...`, { id: `start-${s.id}` });
     try {
@@ -106,6 +170,115 @@ export function Servers() {
     }
   };
 
+  const handleInstall = async (s: McpServer) => {
+    setInstallingIds((prev) => new Set(prev).add(s.id));
+    toast.loading(`正在安装 ${s.name}…`, { id: `install-${s.id}` });
+    try {
+      await installServer(s.id);
+      // 结果通过 install_progress 事件回调
+    } catch (e) {
+      setInstallingIds((prev) => { const n = new Set(prev); n.delete(s.id); return n; });
+      toast.error(`触发安装失败: ${e}`, { id: `install-${s.id}` });
+    }
+  };
+
+  const handleUninstall = async (s: McpServer) => {
+    setUninstallingIds((prev) => new Set(prev).add(s.id));
+    toast.loading(`正在卸载 ${s.name}…`, { id: `install-${s.id}` });
+    try {
+      await uninstallServer(s.id);
+    } catch (e) {
+      setUninstallingIds((prev) => { const n = new Set(prev); n.delete(s.id); return n; });
+      toast.error(`触发卸载失败: ${e}`, { id: `install-${s.id}` });
+    }
+  };
+
+  const handleRefreshInstall = async (s: McpServer) => {
+    toast.loading(`正在探测 ${s.name}…`, { id: `install-${s.id}` });
+    try {
+      await refreshInstallStatus(s.id);
+      toast.success(`${s.name} 状态已刷新`, { id: `install-${s.id}` });
+      await load();
+    } catch (e) {
+      toast.error(`刷新失败: ${e}`, { id: `install-${s.id}` });
+    }
+  };
+
+  /** 当前所有需要安装但未装的 server（按 enabled 筛选） */
+  const pendingInstall = servers.filter((s) => needsInstall(s) && !s.installed && s.enabled);
+
+  const exportSingleToJson = (s: McpServer) => {
+    const mcpServers: Record<string, any> = {};
+    if (s.transport === "http") {
+      mcpServers[s.name] = { type: "http", url: s.url, headers: s.headers };
+    } else if (s.transport === "sse") {
+      mcpServers[s.name] = { type: "sse", url: s.url, headers: s.headers };
+    } else {
+      mcpServers[s.name] = { command: s.command, args: s.args, env: s.env, cwd: s.cwd };
+    }
+    const json = JSON.stringify({ mcpServers }, null, 2);
+    try { navigator.clipboard.writeText(json); } catch {}
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${s.name}_mcp.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`已导出 "${s.name}"（已复制到剪贴板）`);
+  };
+  const askInstallAll = () => {
+    if (pendingInstall.length === 0) {
+      toast.info("没有需要预装的 server");
+      return;
+    }
+    setBatchConfirmOpen(true);
+  };
+
+  /** 批量安装：串行跑（同一时刻一个，避免 npm/uv 全局锁冲突） */
+  const handleInstallAll = async () => {
+    setBatchConfirmOpen(false);
+    // 重新读一次（防止点确认到开始之间列表变了）
+    const target = servers.filter((s) => needsInstall(s) && !s.installed && s.enabled);
+    if (target.length === 0) return;
+
+    const state = {
+      pending: target.map((s) => s.id),
+      current: null as string | null,
+      done: 0,
+      total: target.length,
+      succeeded: [] as string[],
+      failed: [] as { name: string; msg: string }[],
+    };
+    setBatch({ ...state });
+
+    for (const s of target) {
+      state.current = s.id;
+      setBatch({ ...state });
+      try {
+        const waitPromise = waitForInstallDone(s.id);
+        await installServer(s.id);
+        const r = await waitPromise;
+        if (r.ok) state.succeeded.push(s.name);
+        else state.failed.push({ name: s.name, msg: r.message });
+      } catch (e) {
+        state.failed.push({ name: s.name, msg: String(e) });
+      }
+      state.done += 1;
+      state.current = null;
+      setBatch({ ...state });
+    }
+
+    await load();
+    if (state.failed.length === 0) {
+      toast.success(`批量安装完成：${state.succeeded.length} 个 server 已就绪`);
+    } else {
+      toast.warning(`批量安装完成：${state.succeeded.length} 成功，${state.failed.length} 失败（查看下方进度条）`);
+    }
+    // 保留 batch 状态显示总结，几秒后自动清掉
+    setTimeout(() => setBatch((b) => (b && b.done === b.total ? null : b)), 8000);
+  };
+
   // 导入 JSON：用户粘贴 mcpServers 配置，解析后批量入库
   const importFromJson = () => setImportModalOpen(true);
 
@@ -139,7 +312,18 @@ export function Servers() {
       <Section
         title={t("servers.title")}
         action={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {pendingInstall.length > 0 && (
+              <button
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 disabled:opacity-50"
+                onClick={askInstallAll}
+                disabled={batch !== null}
+                title="一次性预装所有未安装的 server"
+              >
+                {batch ? <Loader2 size={14} className="animate-spin" /> : <Download size={14}/>}
+                全部安装 ({pendingInstall.length})
+              </button>
+            )}
             <button className="btn-ghost" onClick={() => setManagingProjects(true)}>
               <FolderOpen size={14}/>{t("projects.title")}
             </button>
@@ -171,6 +355,43 @@ export function Servers() {
           <span className="text-xs text-fg-muted">{filtered.length} / {servers.length}</span>
         </div>
 
+        {batch && (
+          <div className="rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Loader2 size={12} className="animate-spin text-accent" />
+                <span>
+                  批量安装 {batch.done}/{batch.total}
+                  {batch.current && (() => {
+                    const cur = servers.find((s) => s.id === batch.current);
+                    return cur ? <span className="ml-2 text-fg-muted">正在装: <span className="text-fg">{cur.name}</span></span> : null;
+                  })()}
+                </span>
+              </div>
+              {batch.done === batch.total && (
+                <div className="flex items-center gap-3">
+                  <span className="text-ok">✓ {batch.succeeded.length}</span>
+                  {batch.failed.length > 0 && <span className="text-err">✗ {batch.failed.length}</span>}
+                  <button className="text-fg-muted hover:text-fg" onClick={() => setBatch(null)} title="关闭"><X size={12}/></button>
+                </div>
+              )}
+            </div>
+            <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-bg-subtle">
+              <div
+                className="h-full bg-accent transition-all"
+                style={{ width: `${(batch.done / batch.total) * 100}%` }}
+              />
+            </div>
+            {batch.failed.length > 0 && batch.done === batch.total && (
+              <ul className="mt-1.5 space-y-0.5 text-err/90">
+                {batch.failed.map((f, i) => (
+                  <li key={i} className="truncate">· {f.name}: {f.msg}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {filtered.length === 0 ? (
           <EmptyHint>{t("common.empty")}</EmptyHint>
         ) : (
@@ -182,6 +403,7 @@ export function Servers() {
                   <th className="px-3 py-2 font-medium">{t("common.transport")}</th>
                   <th className="px-3 py-2 font-medium">{t("projects.title")}</th>
                   <th className="px-3 py-2 font-medium">{t("common.status")}</th>
+                  <th className="px-3 py-2 font-medium">包</th>
                   <th className="px-3 py-2 font-medium">{t("common.last_error")}</th>
                   <th className="px-3 py-2 font-medium text-right">{t("common.actions")}</th>
                 </tr>
@@ -190,6 +412,11 @@ export function Servers() {
                 {filtered.map((s) => {
                   const st = states[s.id];
                   const project = projects.find((p) => p.id === s.project_id);
+                  const showInstall = needsInstall(s);
+                  const isInstalling = installingIds.has(s.id);
+                  const isUninstalling = uninstallingIds.has(s.id);
+                  const progress = installProgress[s.id];
+                  const startBlocked = showInstall && !s.installed;
                   return (
                     <tr key={s.id} className="border-t border-border hover:bg-overlay-soft">
                       <td
@@ -203,27 +430,116 @@ export function Servers() {
                       <td className="px-3 py-2"><span className="badge-mute">{s.transport}</span></td>
                       <td className="px-3 py-2 text-xs text-fg-muted">{project?.name ?? "—"}</td>
                       <td className="px-3 py-2">{st ? <StatusBadge status={st.status} /> : <span className="text-fg-muted">—</span>}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {!showInstall ? (
+                          <span className="text-fg-muted">—</span>
+                        ) : isInstalling || isUninstalling ? (
+                          <div className="flex items-center gap-1.5">
+                            <Loader2 size={12} className="animate-spin text-accent" />
+                            <span className="truncate text-fg-muted" title={progress?.message}>{progress?.message ?? "处理中…"}</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {/* 状态徽章：点击 = 重新探测 */}
+                            <button
+                              className="inline-flex w-fit items-center gap-1 rounded px-1 py-0.5 hover:bg-overlay-soft"
+                              onClick={() => handleRefreshInstall(s)}
+                              title="点击重新探测本地安装状态"
+                            >
+                              {s.installed ? (
+                                <>
+                                  <PackageCheck size={12} className="text-ok"/>
+                                  <span className="text-ok">已装 v{s.installed_version ?? "?"}</span>
+                                </>
+                              ) : s.install_error ? (
+                                <>
+                                  <span className="text-err">⚠ 安装失败</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
+                                  <span className="text-amber-400">未安装</span>
+                                </>
+                              )}
+                            </button>
+                            {/* 错误明细 */}
+                            {s.install_error && (
+                              <span className="truncate text-[10px] text-fg-muted max-w-[180px]" title={s.install_error}>
+                                {s.install_error}
+                              </span>
+                            )}
+                            {/* 主操作按钮 */}
+                            <div className="flex items-center gap-1">
+                              {s.installed ? (
+                                <>
+                                  <button
+                                    className="btn-ghost p-1 text-amber-400 hover:text-amber-300 disabled:opacity-40"
+                                    onClick={() => handleInstall(s)}
+                                    disabled={isInstalling}
+                                    title="升级到最新版"
+                                  >
+                                    <RefreshCw size={12}/>
+                                  </button>
+                                  <button
+                                    className="btn-ghost p-1 text-fg-muted hover:text-err disabled:opacity-40"
+                                    onClick={() => handleUninstall(s)}
+                                    disabled={isUninstalling}
+                                    title="卸载预装的包"
+                                  >
+                                    <Unplug size={12}/>
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  className="btn-ghost inline-flex items-center gap-1 px-1.5 py-0.5 text-accent hover:opacity-80 disabled:opacity-40"
+                                  onClick={() => handleInstall(s)}
+                                  disabled={isInstalling}
+                                  title="预装包到本地（npm i -g / uv tool install）"
+                                >
+                                  <Download size={12}/>
+                                  <span>安装</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-xs text-err/80 max-w-xs truncate">{st?.last_error ?? "—"}</td>
                       <td className="px-3 py-2">
                         <div className="flex justify-end gap-1">
+                          {/* 启动 / 停止（主操作） */}
                           {st?.status === "running" ? (
-                            <button className="btn-ghost p-1.5 text-ok" onClick={() => handleStop(s)} disabled={stoppingIds.has(s.id)} title={t("common.stop")}>
+                            <button
+                              className="btn-ghost p-1.5 text-err hover:opacity-80"
+                              onClick={() => handleStop(s)}
+                              disabled={stoppingIds.has(s.id)}
+                              title={t("common.stop")}
+                            >
                               {stoppingIds.has(s.id) ? <Loader2 size={14} className="animate-spin" /> : <Square size={14}/>}
                             </button>
                           ) : (
-                            <button className="btn-ghost p-1.5 text-ok" onClick={() => handleStart(s)} disabled={startingIds.has(s.id)} title={t("common.start")}>
+                            <button
+                              className="btn-ghost p-1.5 text-ok disabled:opacity-40 disabled:cursor-not-allowed"
+                              onClick={() => handleStart(s)}
+                              disabled={startingIds.has(s.id) || startBlocked}
+                              title={startBlocked ? "请先安装包后再启动" : t("common.start")}
+                            >
                               {startingIds.has(s.id) ? <Loader2 size={14} className="animate-spin" /> : <Play size={14}/>}
                             </button>
                           )}
-                          {/* 测速：橙色 —— "我要试一下" */}
+                          {/* 测试：橙色 —— 诊断 */}
                           <button className="btn-ghost p-1.5 text-amber-400 hover:text-amber-300" onClick={() => handleTest(s)} title={t("common.test")}>
                             <TestTube2 size={14}/>
                           </button>
-                          {/* 编辑：蓝色 —— "我要改配置" */}
+                          {/* 编辑：蓝色 */}
                           <button className="btn-ghost p-1.5 text-accent hover:opacity-80" onClick={() => setEditing(s)} title={t("common.edit")}>
                             <Pencil size={14}/>
                           </button>
-                          {/* 删除：红色 —— "危险" */}
+                          {/* 导出单个 JSON */}
+                          <button className="btn-ghost p-1.5 text-fg-muted hover:text-fg" onClick={() => exportSingleToJson(s)} title="导出该 server 的 mcpServers JSON">
+                            <FileJson size={14}/>
+                          </button>
+                          {/* 删除：红色 —— 危险 */}
                           <button className="btn-ghost p-1.5 text-err hover:text-err/80" onClick={() => handleDelete(s)} title={t("common.delete")}>
                             <Trash2 size={14}/>
                           </button>
@@ -259,6 +575,43 @@ export function Servers() {
           onClose={() => setImportModalOpen(false)}
           onImported={load}
         />
+      )}
+
+      {batchConfirmOpen && (
+        <Modal
+          open
+          title="批量预装包"
+          onClose={() => setBatchConfirmOpen(false)}
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => setBatchConfirmOpen(false)}>取消</button>
+              <button className="btn-primary" onClick={handleInstallAll}>
+                <Download size={14}/>开始安装 {pendingInstall.length} 个
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <p>
+              将为下面 <b>{pendingInstall.length}</b> 个 server 执行预装包（<code className="text-fg">npm i -g</code> / <code className="text-fg">uv tool install</code>）：
+            </p>
+            <p className="text-xs text-fg-muted">
+              由于 npm / uv 全局安装会争抢同一份全局 prefix 锁，工具将<strong>串行</strong>逐个安装（不会并行），预计耗时较长。
+              期间可以切到其它页面，已安装的 server 不会受影响。
+            </p>
+            <div className="max-h-60 overflow-auto rounded border border-border bg-bg-subtle p-2">
+              <ul className="space-y-1">
+                {pendingInstall.map((s) => (
+                  <li key={s.id} className="flex items-center gap-2">
+                    <span className="badge-mute text-[10px]">{s.command}</span>
+                    <span className="font-medium">{s.name}</span>
+                    <code className="flex-1 truncate text-xs text-fg-muted">{(s.args ?? []).join(" ")}</code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {viewing && (

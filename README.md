@@ -103,22 +103,28 @@ npm run tauri:build
 #   src-tauri/target/release/bundle/nsis/AI Manage_0.1.0_x64-setup.exe
 ```
 
-## 🔌 接入 Claude Desktop
+## 🔌 接入 MCP 客户端
 
-在 Claude Desktop 配置 `mcpServers`：
+推荐方式（不需要在客户端机器安装 MS Manage 主程序）：
 
 ```json
 {
   "mcpServers": {
     "ms-manage": {
-      "command": "C:\\Program Files\\MS Manage\\ms_manage.exe",
-      "args": ["proxy", "stdio"]
+      "command": "npx",
+      "args": ["-y", "@ms-manage/cli@latest", "connect"],
+      "env": {
+        "MS_MANAGE_URL": "http://127.0.0.1:39231/mcp",
+        "MS_MANAGE_TOKEN": "mcpr_xxx"
+      }
     }
   }
 }
 ```
 
-或在 MS Manage 应用的 **客户端接入** 页一键复制 HTTP 接入配置。
+把 `MS_MANAGE_TOKEN` 换成 MS Manage **设置**页显示的 token。MS Manage 必须保持运行。
+
+或在 MS Manage 应用的 **客户端接入** 页一键复制配置。
 
 ## 📝 License
 

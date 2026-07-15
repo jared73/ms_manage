@@ -40,22 +40,24 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
-    let settings = state.storage.load_settings().map_err(|e| anyhow::anyhow!("{e}"))?;
-    let token = settings.mcp_token.clone().unwrap_or_default();
     // 监听 0.0.0.0（同时支持 IPv4 127.0.0.1 和 IPv6 [::1]），但默认配置给客户端的是 127.0.0.1
     let listen_addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(&listen_addr).await?;
     let local = listener.local_addr().ok();
+    let initial_token = state.storage.load_settings()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .mcp_token
+        .clone()
+        .unwrap_or_default();
     eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?} (also reachable via 127.0.0.1:{port})");
-    eprintln!("[ms-manage] token (Authorization: Bearer ...): {token}");
+    eprintln!("[ms-manage] token (Authorization: Bearer ...): {initial_token}");
     log("info", "proxy", format!("HTTP MCP proxy listening on 0.0.0.0:{port}"), None);
 
     loop {
         let (stream, _peer) = listener.accept().await?;
         let state = state.clone();
-        let token = token.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, state, token).await {
+            if let Err(e) = handle_conn(stream, state).await {
                 eprintln!("[ms-manage] conn error: {e}");
                 log("error", "proxy", format!("连接处理失败：{e}"), None);
             }
@@ -63,7 +65,7 @@ pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
     }
 }
 
-async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token: String) -> anyhow::Result<()> {
+async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Result<()> {
     let (read, mut write) = stream.split();
     let mut reader = BufReader::new(read);
 
@@ -105,6 +107,11 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>, expected_token
     }
 
     let auth = headers.get("authorization").cloned().unwrap_or_default();
+    let expected_token = state.storage.load_settings()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .mcp_token
+        .clone()
+        .unwrap_or_default();
     let token_ok = auth == format!("Bearer {expected_token}") || query_token == expected_token;
     if !token_ok {
         // 健康检查 / SSE endpoint / OPTIONS 都不需要 token（GET 试探开放）

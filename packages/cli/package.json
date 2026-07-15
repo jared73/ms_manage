@@ -1,0 +1,42 @@
+{
+  "name": "@ms-manage/cli",
+  "version": "0.1.0",
+  "description": "MS Manage 客户端 CLI —— 通过 stdio↔HTTP 转发，让任意 MCP 客户端（Claude Desktop / Cursor / Cline 等）一键接入 MS Manage",
+  "type": "module",
+  "bin": {
+    "ms-manage": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "ms-manage",
+    "mcp-router",
+    "model-context-protocol",
+    "stdio",
+    "http",
+    "proxy"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "undici": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.0"
+  }
+}
