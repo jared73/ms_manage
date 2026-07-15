@@ -415,6 +415,8 @@ function blankSkill(): Skill {
   };
 }
 
+import { marked } from "marked";
+
 function SkillFormModal({ initial, onClose, onSaved }: {
   initial: Skill;
   onClose: () => void;
@@ -477,9 +479,12 @@ function SkillFormModal({ initial, onClose, onSaved }: {
           placeholder={t("skills.content_placeholder") as string}
         />
       ) : (
-        <div className="prose prose-invert max-w-none rounded-md border border-border bg-bg-subtle p-4 [&_*]:text-fg [&_code]:text-accent [&_a]:text-accent">
-          <pre className="whitespace-pre-wrap text-sm">{content.replace(/^---[\s\S]*?---\n/, "")}</pre>
-        </div>
+        <div
+          className="prose prose-invert max-h-[60vh] max-w-none overflow-auto rounded-md border border-border bg-bg-subtle p-4 [&_*]:text-fg [&_code]:text-accent [&_a]:text-accent"
+          dangerouslySetInnerHTML={{
+            __html: marked.parse(content.replace(/^---[\s\S]*?---\n/, "")) as string,
+          }}
+        />
       )}
       <div className="mt-2 text-xs text-fg-muted">{t("skills.frontmatter_hint")}</div>
     </Modal>
