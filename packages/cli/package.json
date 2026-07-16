@@ -1,6 +1,6 @@
 {
   "name": "@ms-manage/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MS Manage 客户端 CLI —— 通过 stdio↔HTTP 转发，让任意 MCP 客户端（Claude Desktop / Cursor / Cline 等）一键接入 MS Manage",
   "type": "module",
   "bin": {

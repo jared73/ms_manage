@@ -191,7 +191,7 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
         // 健康检查 + 根路径
         ("GET", "/") | ("GET", "/health") => {
             let _ = write_all(&mut write,
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ms-manage\",\"version\":\"0.1.0\"}"
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ms-manage\",\"version\":\"0.2.0\"}"
             ).await;
         }
         // CORS preflight

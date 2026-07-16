@@ -115,10 +115,10 @@ export function Settings() {
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {([
+              { id: "light",    label: t("settings.theme_light"),    swatch: "#7c3aed", bg: "#f8fafc" },
               { id: "purple",   label: t("settings.theme_purple"),   swatch: "#7c5cff", bg: "#0f1115" },
               { id: "midnight", label: t("settings.theme_midnight"), swatch: "#38bdf8", bg: "#0a1628" },
               { id: "forest",   label: t("settings.theme_forest"),   swatch: "#34d399", bg: "#0f1f15" },
-              { id: "light",    label: t("settings.theme_light"),    swatch: "#7c3aed", bg: "#f8fafc" },
             ] as const).map(({ id, label, swatch, bg }) => {
               const active = storeTheme === id;
               return (

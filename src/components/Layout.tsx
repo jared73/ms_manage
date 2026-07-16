@@ -52,7 +52,7 @@ export function Layout() {
           ))}
         </nav>
         <div className="border-t border-border p-3 text-[11px] text-fg-muted">
-          v0.1.0 · Tauri 2 + React
+          v0.2.0 · Tauri 2 + React
         </div>
       </aside>
       <main className="flex-1 overflow-auto">

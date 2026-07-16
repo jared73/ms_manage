@@ -161,7 +161,7 @@ impl Default for StoredSettings {
     fn default() -> Self {
         Self {
             language: "zh".into(),
-            theme: "purple".into(),
+            theme: "light".into(),
             auto_launch: false,
             proxy_mode: "stdio".into(),
             proxy_http_port: 39231,

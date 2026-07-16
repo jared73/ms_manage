@@ -50,7 +50,7 @@ async fn fetch_from_github() -> Result<Vec<serde_json::Value>, String> {
         .unwrap_or_default();
 
     eprintln!("[market] fetch_from_github: listing plugins (token={})...", if github_token.is_empty() { "none" } else { "set" });
-    let mut builder = reqwest::Client::builder().user_agent("ms-manage/0.1.0");
+    let mut builder = reqwest::Client::builder().user_agent("ms-manage/0.2.0");
     let client = builder.build().map_err(|e| format!("HTTP client failed: {e}"))?;
 
     let url = format!("https://api.github.com/repos/{}/contents/plugins", ANTHROPIC_SKILLS_REPO);
@@ -326,7 +326,7 @@ async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str
     // 下载仓库 tarball（包含完整目录）
     let url = format!("https://api.github.com/repos/{}/tarball/{}", repo, percent_encode(branch));
     let client = reqwest::Client::builder()
-        .user_agent("ms-manage/0.1.0")
+        .user_agent("ms-manage/0.2.0")
         .build()
         .map_err(|e| format!("HTTP client failed: {e}"))?;
     let mut req = client.get(&url)
