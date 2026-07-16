@@ -4,6 +4,7 @@
 // 通过 mod 统一暴露给 generate_handler!。
 // 业务核心（代理、server、skill 等）在子模块里。
 
+pub mod autostart;
 pub mod cli;
 pub mod cmd_app;
 pub mod cmd_install;
@@ -51,10 +52,6 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--minimized"]),
-        ))
         .manage(state.clone())
         .setup(move |app| {
             // 跟 mcp-router 一样：GUI 起来 = 代理起来，关 GUI = 代理死。
