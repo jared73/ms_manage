@@ -96,14 +96,27 @@ export function Connections() {
             <li>跨平台一致（macOS / Linux / Windows 同一份配置）</li>
             <li>多人可共享同一台 MS Manage 实例</li>
           </ul>
-          <div>
-            <div className="mb-1 flex items-center gap-1 text-[11px] text-fg-muted">
-              <Terminal size={11}/>mcpServers JSON
-            </div>
-            <pre className="max-h-48 overflow-auto rounded bg-bg p-3 text-[11px] leading-relaxed">
+
+          <details className="rounded-lg border border-border bg-bg-subtle" open>
+            <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium hover:bg-overlay-soft">
+              <span className="flex items-center gap-2">
+                <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+                <Terminal size={14}/>mcpServers JSON（推荐 · npx）
+              </span>
+              <button
+                className="btn-ghost px-2 py-0.5 text-[11px]"
+                onClick={(e) => { e.preventDefault(); npxConfig && copy(npxConfig, "npx", "mcpServers JSON"); }}
+                disabled={!npxConfig}
+              >
+                {copied === "npx" ? "✓ 已复制" : <><Copy size={10}/>复制</>}
+              </button>
+            </summary>
+            <div className="border-t border-border p-4">
+              <pre className="max-h-48 overflow-auto rounded bg-bg p-3 text-[11px] leading-relaxed">
 {npxConfig ?? "（等待 settings 加载）"}
-            </pre>
-          </div>
+              </pre>
+            </div>
+          </details>
         </div>
       </Section>
 
