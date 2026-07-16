@@ -1,136 +1,82 @@
-//! Windows 开机自启 —— 直接写注册表 CurrentUser\Run
+//! Windows 开机自启 —— 在 Startup 文件夹创建/删除 .lnk 快捷方式
 //!
-//! 不依赖 tauri-plugin-autostart，避免某些环境（组策略/注册表保护）下返回
-//! "Access denied"（os error 5）。写入 HKEY_CURRENT_USER 通常不需要管理员权限。
+//! 不依赖注册表（某些环境写 HKEY_CURRENT_USER\Run 会被组策略/安全软件拒绝）。
+//! 通过 PowerShell 的 WScript.Shell 创建快捷方式，避免直接依赖 COM 接口定义。
+//! Windows 启动文件夹路径：
+//!   %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, MAX_PATH};
-use windows_sys::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_OPTION_NON_VOLATILE, REG_SZ, KEY_WRITE, KEY_READ,
-    RegCreateKeyExW, RegDeleteValueW, RegQueryValueExW, RegSetValueExW, RegCloseKey,
-};
 
-const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const APP_NAME: &str = "MS Manage";
-
-fn to_wstr(s: &str) -> Vec<u16> {
-    OsString::from(s).encode_wide().chain(Some(0)).collect()
-}
 
 fn get_exe_path() -> Option<PathBuf> {
     std::env::current_exe().ok()
 }
 
-type HKey = *mut std::ffi::c_void;
-
-/// 返回开机自启是否已启用（注册表里存在 MS Manage 项）
-pub fn is_enabled() -> bool {
-    let hkcu = to_wstr(RUN_KEY);
-    let app = to_wstr(APP_NAME);
-    let mut hkey: HKey = std::ptr::null_mut();
-    unsafe {
-        let ret = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            hkcu.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_READ,
-            std::ptr::null(),
-            &mut hkey,
-            std::ptr::null_mut(),
-        );
-        if ret != ERROR_SUCCESS {
-            return false;
-        }
-        let mut len = 0u32;
-        let status = RegQueryValueExW(
-            hkey,
-            app.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut len,
-        );
-        RegCloseKey(hkey);
-        status == ERROR_SUCCESS
-    }
+fn startup_dir() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("Microsoft").join("Windows").join("Start Menu").join("Programs").join("Startup"))
 }
 
-/// 开启开机自启：写入注册表 Run 项，带 `--minimized` 参数
+fn lnk_path() -> Option<PathBuf> {
+    startup_dir().map(|d| d.join(format!("{}.lnk", APP_NAME)))
+}
+
+/// 返回开机自启是否已启用（Startup 文件夹里存在 MS Manage.lnk）
+pub fn is_enabled() -> bool {
+    lnk_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// 开启开机自启：在 Startup 文件夹创建指向当前 exe 的快捷方式，带 --minimized
 pub fn enable() -> Result<(), String> {
     let exe = get_exe_path().ok_or_else(|| "无法获取当前程序路径".to_string())?;
+    let lnk = lnk_path().ok_or_else(|| "无法获取启动文件夹路径".to_string())?;
+
+    if let Some(parent) = lnk.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建启动文件夹失败: {e}"))?;
+    }
+
     let exe_str = exe.to_string_lossy().to_string();
-    // 命令行格式："C:\path\to\ms_manage.exe" --minimized
-    let cmd = format!("\"{}\" --minimized", exe_str.replace('"', "\\\""));
+    let lnk_str = lnk.to_string_lossy().to_string();
 
-    let hkcu = to_wstr(RUN_KEY);
-    let app = to_wstr(APP_NAME);
-    let value = to_wstr(&cmd);
+    // 用 PowerShell 创建快捷方式，避免 rust 里绑定 COM 接口
+    let ps = format!(
+        "$ws = New-Object -ComObject WScript.Shell; \
+         $s = $ws.CreateShortcut('{}'); \
+         $s.TargetPath = '{}'; \
+         $s.Arguments = '--minimized'; \
+         $s.Description = 'MS Manage 开机自启'; \
+         $s.Save()",
+        escape_ps_single(&lnk_str),
+        escape_ps_single(&exe_str),
+    );
 
-    unsafe {
-        let mut hkey: HKey = std::ptr::null_mut();
-        let ret = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            hkcu.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            std::ptr::null(),
-            &mut hkey,
-            std::ptr::null_mut(),
-        );
-        if ret != ERROR_SUCCESS {
-            return Err(format!("打开注册表失败 (0x{:08X})", ret));
-        }
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .output()
+        .map_err(|e| format!("启动 PowerShell 失败: {e}"))?;
 
-        let data_len = (value.len() * 2) as u32;
-        let ret = RegSetValueExW(
-            hkey,
-            app.as_ptr(),
-            0,
-            REG_SZ,
-            value.as_ptr() as *const u8,
-            data_len,
-        );
-        RegCloseKey(hkey);
-        if ret != ERROR_SUCCESS {
-            return Err(format!("写入注册表失败 (0x{:08X})", ret));
-        }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("创建快捷方式失败: {stderr}"));
+    }
+
+    if !lnk.exists() {
+        return Err("快捷方式未生成".to_string());
+    }
+
+    Ok(())
+}
+
+/// 关闭开机自启：删除 Startup 文件夹里的 MS Manage.lnk
+pub fn disable() -> Result<(), String> {
+    let lnk = lnk_path().ok_or_else(|| "无法获取启动文件夹路径".to_string())?;
+    if lnk.exists() {
+        std::fs::remove_file(&lnk).map_err(|e| format!("删除快捷方式失败: {e}"))?;
     }
     Ok(())
 }
 
-/// 关闭开机自启：删除注册表 Run 项
-pub fn disable() -> Result<(), String> {
-    let hkcu = to_wstr(RUN_KEY);
-    let app = to_wstr(APP_NAME);
-
-    unsafe {
-        let mut hkey: HKey = std::ptr::null_mut();
-        let ret = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            hkcu.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            std::ptr::null(),
-            &mut hkey,
-            std::ptr::null_mut(),
-        );
-        if ret != ERROR_SUCCESS {
-            return Err(format!("打开注册表失败 (0x{:08X})", ret));
-        }
-        let ret = RegDeleteValueW(hkey, app.as_ptr());
-        RegCloseKey(hkey);
-        if ret != ERROR_SUCCESS && ret != 2 {
-            // 2 = ERROR_FILE_NOT_FOUND，项本来就不存在，不算错
-            return Err(format!("删除注册表失败 (0x{:08X})", ret));
-        }
-    }
-    Ok(())
+fn escape_ps_single(s: &str) -> String {
+    // PowerShell 单引号字符串里，两个单引号表示一个单引号
+    s.replace("'", "''")
 }
