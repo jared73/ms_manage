@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, FolderOpen, RefreshCw, Power } from "lucide-react";
+import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled } from "@/lib/ipc";
-import type { AppSettings } from "@/lib/ipc";
+import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled, doctorCheck } from "@/lib/ipc";
+import type { AppSettings, DoctorItem } from "@/lib/ipc";
 import { useApp, type ThemeName } from "@/stores/app";
 
 export function Settings() {
@@ -16,6 +16,19 @@ export function Settings() {
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
+  const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
+  const [doctorRunning, setDoctorRunning] = useState(false);
+
+  const runDoctor = async () => {
+    setDoctorRunning(true);
+    try {
+      setDoctor(await doctorCheck());
+    } catch (e) {
+      toast.error(`体检失败: ${e}`);
+    } finally {
+      setDoctorRunning(false);
+    }
+  };
 
   useEffect(() => {
     void (async () => {
@@ -166,6 +179,53 @@ export function Settings() {
               />
             </button>
           </div>
+        </div>
+
+        {/* 一键体检 */}
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold">环境体检</h3>
+              <div className="text-xs text-fg-muted">检查当前机器是否具备运行 MCP server、接入客户端的条件</div>
+            </div>
+            <button className="btn-primary inline-flex items-center gap-1.5" onClick={runDoctor} disabled={doctorRunning}>
+              {doctorRunning ? <Loader2 size={14} className="animate-spin"/> : <Stethoscope size={14}/>}
+              {doctorRunning ? "检查中…" : doctor ? "重新检查" : "一键体检"}
+            </button>
+          </div>
+          {doctor && (
+            <ul className="space-y-2">
+              {doctor.map((it) => (
+                <li key={it.id} className="rounded-lg border border-border bg-bg-subtle px-3 py-2">
+                  <div className="flex items-start gap-2.5">
+                    <span className="mt-0.5 shrink-0">
+                      {it.status === "ok" ? <CheckCircle2 size={15} className="text-ok"/>
+                        : it.status === "warn" ? <AlertTriangle size={15} className="text-amber-400"/>
+                        : <XCircle size={15} className="text-err"/>}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-sm font-medium">{it.title}</span>
+                        <span className="text-xs text-fg-muted">{it.detail}</span>
+                      </div>
+                      {it.suggestion && (
+                        <div className="mt-1 flex items-start gap-1.5 text-xs text-amber-300">
+                          <span className="flex-1 break-all">{it.suggestion}</span>
+                          <button
+                            className="btn-ghost shrink-0 p-0.5"
+                            title="复制建议"
+                            onClick={() => { navigator.clipboard.writeText(it.suggestion!); toast.success("已复制", { duration: 1200 }); }}
+                          >
+                            <Copy size={11}/>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* About */}

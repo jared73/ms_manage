@@ -7,6 +7,7 @@
 pub mod autostart;
 pub mod cli;
 pub mod cmd_app;
+pub mod cmd_doctor;
 pub mod cmd_install;
 pub mod cmd_logs;
 pub mod cmd_market;
@@ -15,6 +16,7 @@ pub mod cmd_servers;
 pub mod cmd_settings;
 pub mod cmd_skills;
 pub mod diagnose;
+pub mod install;
 pub mod process_util;
 pub mod proxy;
 pub mod proxy_endpoint;
@@ -129,6 +131,7 @@ pub fn run() {
             cmd_app::app_info,
             cmd_app::open_data_dir,
             cmd_app::open_external,
+            cmd_doctor::doctor_check,
             cmd_servers::list_servers,
             cmd_servers::list_server_states,
             cmd_servers::get_server_state,
@@ -179,7 +182,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building MS Manage")
-        .run(|app, event| {
+        .run(|_app, event| {
             // 关 GUI = 关一切：杀掉所有 spawn 出去的 MCP 子进程，
             // 否则它们会变成孤儿继续占着端口/资源，外部仍然能感觉到它们在跑。
             // HTTP 代理是 GUI 进程内的 tokio task，进程退出会自动死，不用管。
