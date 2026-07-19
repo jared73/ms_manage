@@ -10,7 +10,16 @@ fn to_stored(s: serde_json::Value) -> Result<StoredServer, String> {
 }
 
 fn from_stored(s: &StoredServer) -> serde_json::Value {
-    serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
+    let mut v = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+    // 派生字段：是否需要预装（command 是 npx/uvx 等包管理器）。
+    // 判定收敛在后端 detect_pkg，前端直接读取，避免前后端各维护一份包管理器列表导致漂移。
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "needs_install".to_string(),
+            serde_json::Value::Bool(crate::cmd_install::detect_pkg(s).is_some()),
+        );
+    }
+    v
 }
 
 #[tauri::command]

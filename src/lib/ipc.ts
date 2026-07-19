@@ -33,6 +33,8 @@ export interface McpServer {
   installed_path?: string | null;
   installed_at?: string | null;
   install_error?: string | null;
+  // 后端派生：command 是否是 npx/uvx 等包管理器（判定收敛在后端 detect_pkg）
+  needs_install?: boolean;
 }
 
 export interface McpTool {
@@ -222,3 +224,13 @@ export const setAutoLaunch = (enabled: boolean) => invoke<void>("set_auto_launch
 export const appInfo = () => invoke<{ version: string; data_dir: string; log_dir: string; app_dir: string }>("app_info");
 export const openExternal = (url: string) => invoke<void>("open_external", { url });
 export const openDataDir = () => invoke<void>("open_data_dir");
+
+// 一键体检
+export interface DoctorItem {
+  id: string;
+  title: string;
+  status: "ok" | "warn" | "fail";
+  detail: string;
+  suggestion?: string;
+}
+export const doctorCheck = () => invoke<DoctorItem[]>("doctor_check");
