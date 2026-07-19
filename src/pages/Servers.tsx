@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Play, Square, RefreshCw, TestTube2, FolderOpen, Loader2, FileInput, FileDown, X, Download, PackageCheck, PackageOpen, Unplug, FileJson } from "lucide-react";
+import { Plus, Trash2, Pencil, Play, Square, RefreshCw, TestTube2, FolderOpen, Loader2, FileInput, FileDown, X, Download, PackageCheck, PackageOpen, Unplug, FileJson, Zap } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
@@ -29,10 +29,14 @@ export function Servers() {
   const [filterProject, setFilterProject] = useState<string>("");
 
   const load = async () => {
-    const [ss, sts, ps] = await Promise.all([listServers(), listServerStates(), listProjects()]);
-    setServers(ss);
-    setStates(Object.fromEntries(sts.map((s) => [s.server.id, s])));
-    setProjects(ps);
+    try {
+      const [ss, sts, ps] = await Promise.all([listServers(), listServerStates(), listProjects()]);
+      setServers(ss);
+      setStates(Object.fromEntries(sts.map((s) => [s.server.id, s])));
+      setProjects(ps);
+    } catch (e) {
+      toast.error(`加载 server 列表失败: ${e}`);
+    }
   };
 
   useEffect(() => { void load(); }, []);
@@ -64,6 +68,9 @@ export function Servers() {
   // 订阅 install_progress 事件
   // ref 存批量安装时等待 done/error 的 resolver
   const progressResolversRef = useRef<Map<string, (r: { ok: boolean; message: string }) => void>>(new Map());
+  // 批量安装进行中时，事件回调里跳过全量 load —— 统一在 handleInstallAll 结束后刷一次，
+  // 否则 N 个 server 装完会触发 N 次 3-IPC 全量重取。
+  const batchRunningRef = useRef(false);
 
   useEffect(() => {
     const unlisten = listen<InstallProgressEvent>("install_progress", (e) => {
@@ -84,26 +91,32 @@ export function Servers() {
           resolver({ ok: stage === "done", message });
           progressResolversRef.current.delete(id);
         }
-        void load();
+        if (!batchRunningRef.current) {
+          void load();
+        }
       }
     });
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  /** 等待指定 server 触发的安装事件走到 done / error */
+  /** 等待指定 server 触发的安装事件走到 done / error。
+   *  10 分钟超时兜底：事件丢失（后端 panic / 先触发后 listen）时不会永久挂起。 */
   const waitForInstallDone = (id: string): Promise<{ ok: boolean; message: string }> => {
     return new Promise((resolve) => {
-      progressResolversRef.current.set(id, resolve);
+      const timer = setTimeout(() => {
+        progressResolversRef.current.delete(id);
+        resolve({ ok: false, message: "等待安装结果超时（10 分钟）" });
+      }, 10 * 60 * 1000);
+      progressResolversRef.current.set(id, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
     });
   };
 
-  // 判断一条 server 是否需要预装（command 是 npx/uvx 等包管理器）
-  const needsInstall = (s: McpServer): boolean => {
-    if (s.transport !== "stdio") return false;
-    const cmd = (s.command ?? "").toLowerCase();
-    if (!cmd) return false;
-    return ["npx", "npm", "pnpm", "pnpx", "yarn", "bun", "bunx", "uvx", "uv"].includes(cmd);
-  };
+  // 是否需要预装（command 是 npx/uvx 等包管理器）——判定收敛在后端 detect_pkg，
+  // 前端直接读派生字段 needs_install，不再自己维护一份包管理器列表。
+  const needsInstall = (s: McpServer): boolean => s.needs_install === true;
 
   const handleDelete = async (s: McpServer) => {
     try {
@@ -138,11 +151,11 @@ export function Servers() {
     setStartingIds((prev) => new Set(prev).add(s.id));
     toast.loading(`正在启动 ${s.name}...`, { id: `start-${s.id}` });
     try {
-      // 顺手把 auto_start 勾上，下次开 GUI 自动起（跟 mcp-router 一致）
+      // 先启动，成功后再把 auto_start 勾上 —— 启动失败不应留下错误的自启标记
+      await startServer(s.id);
       if (!s.auto_start) {
         await upsertServer({ ...s, auto_start: true });
       }
-      await startServer(s.id);
       toast.success(`${s.name} 已启动`, { id: `start-${s.id}` });
       await load();
     } catch (e) {
@@ -251,6 +264,7 @@ export function Servers() {
       failed: [] as { name: string; msg: string }[],
     };
     setBatch({ ...state });
+    batchRunningRef.current = true;
 
     for (const s of target) {
       state.current = s.id;
@@ -269,6 +283,7 @@ export function Servers() {
       setBatch({ ...state });
     }
 
+    batchRunningRef.current = false;
     await load();
     if (state.failed.length === 0) {
       toast.success(`批量安装完成：${state.succeeded.length} 个 server 已就绪`);
@@ -444,7 +459,7 @@ export function Servers() {
                             <button
                               className="inline-flex w-fit items-center gap-1 rounded px-1 py-0.5 hover:bg-overlay-soft"
                               onClick={() => handleRefreshInstall(s)}
-                              title="点击重新探测本地安装状态"
+                              title="点击重新探测预装状态（未预装时由 npx/uvx 按需运行，不影响启动）"
                             >
                               {s.installed ? (
                                 <>
@@ -457,12 +472,13 @@ export function Servers() {
                                 </>
                               ) : (
                                 <>
-                                  <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
-                                  <span className="text-amber-400">未安装</span>
+                                  {/* 包管理器 server 未全局预装时靠 npx/uvx 缓存按需运行，不是「未安装」 */}
+                                  <Zap size={12} className="text-fg-muted"/>
+                                  <span className="text-fg-muted">按需运行</span>
                                 </>
                               )}
                             </button>
-                            {/* 错误明细 */}
+                            {/* 错误明细（「未安装」是中性状态，install_error 为空，不会误显示） */}
                             {s.install_error && (
                               <span className="truncate text-[10px] text-fg-muted max-w-[180px]" title={s.install_error}>
                                 {s.install_error}

@@ -8,13 +8,28 @@ import type { LogEntry } from "@/lib/ipc";
 export function Logs() {
   const { t } = useTranslation();
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [filter, setFilter] = useState<string>("");
+  const [filter, setFilter] = useState<string>("info");
+  const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const load = async () => {
-    const r = await listLogs({ limit: 500, level: filter || undefined });
-    setLogs(r);
+    // level 下拉语义 = 「最低级别」(info 会带上 warn/error)，前端做阈值过滤。
+    const r = await listLogs({ limit: 1000, source: sourceFilter || undefined });
+    const order = ["debug", "info", "warn", "error"];
+    const min = filter ? order.indexOf(filter) : 0;
+    setLogs(r.filter((l) => order.indexOf(l.level) >= min));
   };
-  useEffect(() => { void load(); }, [filter]);
+  useEffect(() => { void load(); }, [filter, sourceFilter]);
+
+  // 自动刷新：新日志（客户端连接 / tools 调用等）不用手动点就能看到
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const t = setInterval(() => { void load(); }, 3000);
+    return () => clearInterval(t);
+  }, [autoRefresh, filter, sourceFilter]);
+
+  // 当前日志里出现过的 source，供筛选下拉
+  const sources = Array.from(new Set(logs.map((l) => l.source))).sort();
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(logs, null, 2)], { type: "application/json" });
@@ -32,13 +47,21 @@ export function Logs() {
         title={t("logs.title")}
         action={
           <div className="flex items-center gap-2">
-            <select className="input max-w-[140px]" value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <select className="input max-w-[120px]" value={filter} onChange={(e) => setFilter(e.target.value)} title="按级别筛选">
               <option value="">all</option>
               <option value="debug">debug</option>
               <option value="info">info</option>
               <option value="warn">warn</option>
               <option value="error">error</option>
             </select>
+            <select className="input max-w-[160px]" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} title="按来源筛选">
+              <option value="">全部来源</option>
+              {sources.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-fg-muted" title="每 3 秒自动刷新">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="accent-accent"/>
+              自动刷新
+            </label>
             <button className="btn-ghost" onClick={exportJson} disabled={logs.length === 0}>
               <Download size={14}/>导出 JSON
             </button>

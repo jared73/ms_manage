@@ -91,11 +91,32 @@ export function Connections() {
             转发到本机 MS Manage 的 HTTP 端口。
           </p>
           <ul className="list-disc space-y-1 pl-5 text-xs text-fg-muted">
-            <li>客户端不需要安装 MS Manage 主程序，只需要能跑 <code className="text-fg">npx</code>（Node.js 18+）</li>
+            <li>客户端不需要安装 MS Manage 主程序，只需要能跑 <code className="text-fg">npx</code>（Node.js 14+）</li>
             <li>MS Manage 必须保持运行（关 GUI = 关代理 = 客户端断连）</li>
             <li>跨平台一致（macOS / Linux / Windows 同一份配置）</li>
             <li>多人可共享同一台 MS Manage 实例</li>
           </ul>
+
+          {/* 客户端前提提示 */}
+          <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3 text-xs text-fg-muted">
+            <div className="mb-1.5 font-medium text-fg">客户端机器需要满足：</div>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <b className="text-fg">已安装 Node.js</b>（14 或更高）。没装的话去
+                <code className="text-fg"> nodejs.org </code>下载；命令行跑 <code className="text-fg">node -v</code> 能显示版本即 OK。
+                这是最常见的失败原因——机器上根本没有 Node。
+              </li>
+              <li>
+                <b className="text-fg">首次需联网</b>下载 <code className="text-fg">@ms-manage/cli</code>。
+                国内如果卡在下载，先给 npm 换国内源：
+                <code className="text-fg">npm config set registry https://registry.npmmirror.com</code>
+              </li>
+              <li>
+                <b className="text-fg">之前装过旧版（0.1.0）要清缓存</b>再连，否则还是旧版：
+                <code className="text-fg">npx clear-npx-cache</code>，或把配置里的 <code className="text-fg">@latest</code> 改成 <code className="text-fg">@0.2.1</code> 强制指定。
+              </li>
+            </ul>
+          </div>
 
           <details className="rounded-lg border border-border bg-bg-subtle" open>
             <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium hover:bg-overlay-soft">
