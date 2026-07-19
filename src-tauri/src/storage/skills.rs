@@ -1,7 +1,7 @@
 //! Skill 存储 —— 目录制：每个 skill 是一个子目录，里面有 SKILL.md。
 //!
 //! 目录结构：
-//! ```
+//! ```text
 //! skills/
 //!   code-review/
 //!     SKILL.md
@@ -184,8 +184,9 @@ pub fn reconcile_symlinks(skills: &[StoredSkill], targets: &[SkillTarget]) -> Re
         // 关闭的 target 跳过
         if !target.enabled { continue; }
         let target_path = PathBuf::from(&target.path);
-        // 跳过不存在的目标目录（避免无谓创建）
-        if !target_path.exists() {
+        // 主动创建 target 目录：新装编辑器的用户也能立即看到 skill
+        if let Err(e) = std::fs::create_dir_all(&target_path) {
+            eprintln!("[skills] create target dir {:?} failed: {e}", target_path);
             continue;
         }
         let entries: Vec<(String, PathBuf)> = match std::fs::read_dir(&target_path) {

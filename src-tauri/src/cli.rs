@@ -327,10 +327,46 @@ pub fn connect(target: Option<String>) {
     eprintln!("提示：先启动代理（ms_manage proxy http），再启动目标客户端。");
 }
 
+/// 把配置写入目标文件：**合并**而非覆盖。
+/// 读旧文件 → 把 `value.mcpServers` 里的条目合并进旧的 `mcpServers` map → 原子写回。
+/// 避免把用户已有的其它 MCP server 配置整个抹掉。
+/// 旧文件不存在 / 解析失败时备份为 .bak 再写入（不静默丢数据）。
 fn write_json(path: &std::path::Path, value: &serde_json::Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
-    let s = serde_json::to_string_pretty(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    std::fs::write(path, s)
+
+    let mut merged = if path.exists() {
+        match std::fs::read_to_string(path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(v) if v.is_object() => v,
+                _ => {
+                    // 旧文件损坏：备份后从空对象开始
+                    let bak = path.with_extension("bak");
+                    let _ = std::fs::copy(path, &bak);
+                    serde_json::json!({})
+                }
+            },
+            Err(_) => serde_json::json!({}),
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    // 合并 mcpServers map
+    if let Some(new_servers) = value.get("mcpServers").and_then(|v| v.as_object()) {
+        let entry = merged.as_object_mut().unwrap();
+        let servers = entry
+            .entry("mcpServers".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(map) = servers.as_object_mut() {
+            for (k, v) in new_servers {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    let s = serde_json::to_string_pretty(&merged).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    crate::storage::atomic_write(path, s.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 /// 把当前连接配置写入所有支持的客户端配置文件。

@@ -1,4 +1,5 @@
 use super::StoredProject;
+use super::atomic_write_json;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -10,7 +11,6 @@ pub fn load(path: &Path) -> Result<Vec<StoredProject>> {
 }
 
 pub fn save(path: &Path, list: &[StoredProject]) -> Result<()> {
-    let json = serde_json::to_string_pretty(list)?;
-    std::fs::write(path, json).context("write projects.json")?;
+    atomic_write_json(path, list).context("write projects.json")?;
     Ok(())
 }

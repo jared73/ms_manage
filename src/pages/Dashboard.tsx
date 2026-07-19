@@ -20,26 +20,29 @@ export function Dashboard() {
   const [exposedTools, setExposedTools] = useState<{ name: string; description?: string; __server: string }[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
 
-  const load = async () => {
-    const [p, ss, sk, i, tt, et] = await Promise.all([
-      getProxyStatus().catch(() => null),
-      listServerStates().catch(() => []),
-      listSkills().catch(() => []),
-      appInfo().catch(() => null),
-      getToolsTotal().catch(() => 0),
-      getExposedTools().catch(() => []),
-    ]);
-    setProxy(p as any);
-    setServers(ss);
-    setSkills(sk);
-    setInfo(i ? { version: i.version } : null);
-    setToolsTotal(typeof tt === "number" ? tt : 0);
-    setExposedTools(Array.isArray(et) ? et : []);
-  };
-
+  // 静态值（版本号）只取一次
   useEffect(() => {
+    appInfo().then((i) => setInfo(i ? { version: i.version } : null)).catch(() => {});
+  }, []);
+
+  // 动态状态：5s 轮询（原来 1.5s 且每次还附带静态项 + 文件系统扫描，太重）
+  useEffect(() => {
+    const load = async () => {
+      const [p, ss, sk, tt, et] = await Promise.all([
+        getProxyStatus().catch(() => null),
+        listServerStates().catch(() => []),
+        listSkills().catch(() => []),
+        getToolsTotal().catch(() => 0),
+        getExposedTools().catch(() => []),
+      ]);
+      setProxy(p as any);
+      setServers(ss);
+      setSkills(sk);
+      setToolsTotal(typeof tt === "number" ? tt : 0);
+      setExposedTools(Array.isArray(et) ? et : []);
+    };
     void load();
-    const t = setInterval(() => { void load(); }, 1500);
+    const t = setInterval(() => { void load(); }, 5000);
     return () => clearInterval(t);
   }, []);
 

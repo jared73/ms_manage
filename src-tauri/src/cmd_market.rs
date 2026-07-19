@@ -29,144 +29,6 @@ fn builtin_skills() -> Vec<(&'static str, &'static str, &'static str, &'static s
     ]
 }
 
-fn fallback_items() -> Vec<serde_json::Value> {
-    let mut out = Vec::new();
-    for (id, kind, author, desc, installs) in builtin_servers().into_iter().chain(builtin_skills().into_iter()) {
-        out.push(json!({
-            "id": id, "kind": kind, "name": id, "description": desc,
-            "author": author, "tags": Vec::<String>::new(),
-            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
-        }));
-    }
-    out
-}
-
-/// 从 GitHub 拉取 Anthropic Plugins（用 API 读目录 + plugin.json 描述）
-async fn fetch_from_github() -> Result<Vec<serde_json::Value>, String> {
-    // 读 settings 拿 GitHub token（有 token 限流 5000 次/小时，无 token 只有 60 次/小时）
-    let github_token = crate::state::try_current()
-        .and_then(|s| s.storage.load_settings().ok())
-        .and_then(|s| s.github_token.clone())
-        .unwrap_or_default();
-
-    eprintln!("[market] fetch_from_github: listing plugins (token={})...", if github_token.is_empty() { "none" } else { "set" });
-    let mut builder = reqwest::Client::builder().user_agent("ms-manage/0.2.0");
-    let client = builder.build().map_err(|e| format!("HTTP client failed: {e}"))?;
-
-    let url = format!("https://api.github.com/repos/{}/contents/plugins", ANTHROPIC_SKILLS_REPO);
-    let mut req = client
-        .get(&url)
-        .header("Accept", "application/vnd.github.v3+json");
-    if !github_token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {github_token}"));
-    }
-    let resp = req.send().await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("GitHub API returned {}", resp.status()));
-    }
-
-    let body: serde_json::Value = resp.json().await
-        .map_err(|e| format!("GitHub API response parse failed: {e}"))?;
-
-    let mut items: Vec<serde_json::Value> = Vec::new();
-
-    if let Some(entries) = body.as_array() {
-        eprintln!("[market] found {} plugin directories", entries.len());
-        // 逐个读取 plugin.json（不用 stream，简单循环避免 async 类型问题）
-        for entry in entries {
-            let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let entry_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if entry_type != "dir" || name.starts_with('.') {
-                continue;
-            }
-            let desc = fetch_plugin_desc(&client, name).await
-                .unwrap_or_else(|| name.replace('-', " "));
-            eprintln!("[market]   plugin: {} - {}", name, desc);
-            items.push(json!({
-                "id": name, "kind": "skill", "name": name,
-                "description": desc, "author": "anthropic",
-                "source_url": format!("https://github.com/{}/tree/main/plugins/{}", ANTHROPIC_SKILLS_REPO, name),
-                "tags": ["anthropic"],
-                "installs": 0, "updated_at": Utc::now().to_rfc3339(),
-            }));
-        }
-    }
-
-    for (id, kind, author, desc, installs) in builtin_servers() {
-        items.push(json!({
-            "id": id, "kind": kind, "name": id, "description": desc,
-            "author": author, "tags": Vec::<String>::new(),
-            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
-        }));
-    }
-
-    for (id, kind, author, desc, installs) in builtin_skills() {
-        items.push(json!({
-            "id": id, "kind": kind, "name": id, "description": desc,
-            "author": author, "tags": Vec::<String>::new(),
-            "installs": installs, "updated_at": "2026-05-01T00:00:00Z",
-        }));
-    }
-
-    eprintln!("[market] fetch_from_github done, total {} items", items.len());
-    Ok(items)
-}
-
-/// 读取 plugins/<name>/.claude-plugin/plugin.json 的 description
-async fn fetch_plugin_desc(client: &reqwest::Client, name: &str) -> Option<String> {
-    let github_token = crate::state::try_current()
-        .and_then(|s| s.storage.load_settings().ok())
-        .and_then(|s| s.github_token.clone())
-        .unwrap_or_default();
-
-    let url = format!(
-        "https://api.github.com/repos/{}/contents/plugins/{}/.claude-plugin/plugin.json",
-        ANTHROPIC_SKILLS_REPO, name
-    );
-    let mut req = client
-        .get(&url)
-        .header("Accept", "application/vnd.github.v3+json");
-    if !github_token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {github_token}"));
-    }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() { return None; }
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let content = body.get("content")?.as_str()?;
-    let decoded = base64_decode(content).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&decoded).ok()?;
-    json.get("description")?.as_str().map(|s| s.to_string())
-}
-
-/// 简单 base64 解码（不需要额外 crate）
-fn base64_decode(s: &str) -> Result<String, String> {
-    const TABLE: [u8; 128] = {
-        let mut t = [255u8; 128];
-        let mut i = 0;
-        while i < 26 { t[b'A' as usize + i] = i as u8; i += 1; }
-        while i < 52 { t[b'a' as usize + (i - 26)] = i as u8; i += 1; }
-        while i < 62 { t[b'0' as usize + (i - 52)] = i as u8; i += 1; }
-        t[b'+' as usize] = 62;
-        t[b'/' as usize] = 63;
-        t
-    };
-    let clean: Vec<u8> = s.bytes().filter(|&b| b != b'\n' && b != b'\r' && b != b' ').collect();
-    if clean.is_empty() { return Ok(String::new()); }
-    let mut out = Vec::new();
-    for chunk in clean.chunks(4) {
-        let mut buf = [0u8; 4];
-        for (i, &b) in chunk.iter().enumerate() {
-            buf[i] = TABLE.get(b as usize).copied().unwrap_or(0);
-        }
-        out.push((buf[0] << 2) | (buf[1] >> 4));
-        if chunk.len() > 2 { out.push((buf[1] << 4) | (buf[2] >> 2)); }
-        if chunk.len() > 3 { out.push((buf[2] << 6) | buf[3]); }
-    }
-    String::from_utf8(out).map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 pub async fn fetch_market(
     kind: Option<String>,
@@ -203,34 +65,22 @@ fn default_market_items() -> Vec<serde_json::Value> {
     out
 }
 
-async fn fetch_and_cache(cp: &std::path::Path) -> Result<Vec<serde_json::Value>, String> {
-    match fetch_from_github().await {
-        Ok(list) => {
-            if let Ok(json) = serde_json::to_string_pretty(&list) {
-                let _ = std::fs::write(cp, json);
-            }
-            Ok(list)
-        }
-        Err(e) => {
-            eprintln!("[market] GitHub fetch failed: {e}, using fallback and caching");
-            let fallback = fallback_items();
-            if let Ok(json) = serde_json::to_string_pretty(&fallback) {
-                let _ = std::fs::write(cp, json);
-            }
-            Ok(fallback)
-        }
-    }
-}
-
 #[tauri::command]
 pub async fn install_market_item(
     id: String,
     kind: String,
-    source_url: Option<String>,
+    _source_url: Option<String>,
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     match kind.as_str() {
-        "server" => install_market_server(state.inner(), &id),
+        "server" => {
+            let new_id = install_market_server(state.inner(), &id)?;
+            // market 安装 server 后自动在后台触发预安装，前端可订阅 install_progress
+            crate::cmd_install::schedule_install(&app, &state, &new_id
+            ).await?;
+            Ok(())
+        }
         "skill" => {
             // 按 id 决定从哪取：local 内嵌 vs github 下载
             let id_str = id.clone();
@@ -373,9 +223,12 @@ async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str
     Ok(())
 }
 
-fn install_market_server(state: &AppState, id: &str) -> Result<(), String> {
+fn install_market_server(state: &AppState, id: &str) -> Result<String, String> {
     let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
-    if list.iter().any(|s| s.name == id) { return Ok(()); }
+    // 仅当已有记录带 "market" tag 时才复用，否则视为同名但不同配置的自建 server。
+    if let Some(existing) = list.iter().find(|s| s.name == id && s.tags.iter().any(|t| t == "market")) {
+        return Ok(existing.id.clone());
+    }
     let now = Utc::now().to_rfc3339();
     let (command, args) = match id {
         "fetch"              => ("uvx".to_string(), vec!["mcp-server-fetch".to_string()]),
@@ -386,9 +239,10 @@ fn install_market_server(state: &AppState, id: &str) -> Result<(), String> {
     };
     let mut env = std::collections::HashMap::new();
     if id == "context7" { env.insert("CONTEXT7_API_KEY".to_string(), String::new()); }
-    let mut tags = vec!["market".to_string(), id.to_string()];
+    let tags = vec!["market".to_string(), id.to_string()];
+    let new_id = uuid::Uuid::new_v4().to_string();
     list.push(StoredServer {
-        id: uuid::Uuid::new_v4().to_string(), name: id.to_string(),
+        id: new_id.clone(), name: id.to_string(),
         description: None, transport: "stdio".to_string(),
         command: Some(command), args, env, cwd: None, url: None,
         headers: std::collections::HashMap::new(), bearer_token: None,
@@ -397,7 +251,8 @@ fn install_market_server(state: &AppState, id: &str) -> Result<(), String> {
         installed: false, installed_version: None, installed_path: None,
         installed_at: None, install_error: None,
     });
-    state.storage.save_servers(&list).map_err(|e| e.to_string())
+    state.storage.save_servers(&list).map_err(|e| e.to_string())?;
+    Ok(new_id)
 }
 
 fn install_market_skill(state: &AppState, id: &str) -> Result<(), String> {
@@ -406,7 +261,7 @@ fn install_market_skill(state: &AppState, id: &str) -> Result<(), String> {
     let file = skill_dir.join(crate::storage::skills::SKILL_FILE);
     if file.exists() { return Ok(()); }
     std::fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
+    let _now = Utc::now().to_rfc3339();
     let body = match id {
         "create-skill" => "# create-skill\n\n创建新 Skill 的工作流：\n\n1. 问用户目的 + 场景\n2. 问调用方式\n3. 起草 frontmatter\n4. 写正文\n5. 保存到 skills/<id>/SKILL.md\n",
         "grill-me" => concat!(
@@ -449,7 +304,9 @@ pub fn install_from_cli(id: &str) {
     let result = builtin_skills().iter().find(|(i, _, _, _, _)| *i == id)
         .map(|_| install_market_skill(&state, id))
         .or_else(|| builtin_servers().iter().find(|(i, _, _, _, _)| *i == id)
-            .map(|_| install_market_server(&state, id)))
+            .map(|_| {
+                install_market_server(&state, id).map(|_new_id| ())
+            }))
         .unwrap_or_else(|| Err(format!("unknown market id '{id}'")));
     match result {
         Ok(()) => println!("✓ installed '{id}'"),

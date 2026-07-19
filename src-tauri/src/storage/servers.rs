@@ -1,4 +1,4 @@
-use super::StoredServer;
+use super::{atomic_write_json, StoredServer};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -11,7 +11,6 @@ pub fn load(path: &Path) -> Result<Vec<StoredServer>> {
 }
 
 pub fn save(path: &Path, list: &[StoredServer]) -> Result<()> {
-    let json = serde_json::to_string_pretty(list)?;
-    std::fs::write(path, json).context("write servers.json")?;
+    atomic_write_json(path, list).context("write servers.json")?;
     Ok(())
 }

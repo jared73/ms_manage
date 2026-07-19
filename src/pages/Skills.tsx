@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File } from "lucide-react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
 import { Modal } from "@/components/Modal";
 import { toast } from "sonner";
@@ -24,8 +26,12 @@ export function Skills() {
   const [dragOver, setDragOver] = useState(false);
 
   const load = async () => {
-    setSkills(await listSkills());
-    setTargets(await listSkillTargets());
+    try {
+      setSkills(await listSkills());
+      setTargets(await listSkillTargets());
+    } catch (e) {
+      toast.error(`加载 skill 列表失败: ${e}`);
+    }
   };
   useEffect(() => { void load(); }, []);
 
@@ -415,8 +421,6 @@ function blankSkill(): Skill {
   };
 }
 
-import { marked } from "marked";
-
 function SkillFormModal({ initial, onClose, onSaved }: {
   initial: Skill;
   onClose: () => void;
@@ -482,7 +486,11 @@ function SkillFormModal({ initial, onClose, onSaved }: {
         <div
           className="prose prose-invert max-h-[60vh] max-w-none overflow-auto rounded-md border border-border bg-bg-subtle p-4 [&_*]:text-fg [&_code]:text-accent [&_a]:text-accent"
           dangerouslySetInnerHTML={{
-            __html: marked.parse(content.replace(/^---[\s\S]*?---\n/, "")) as string,
+            // skill 内容可从 ZIP/GitHub 第三方导入，必须消毒：
+            // 防 markdown 里的 <img onerror> / <a href="javascript:"> 在 webview 执行。
+            __html: DOMPurify.sanitize(
+              marked.parse(content.replace(/^---[\s\S]*?---\n/, "")) as string,
+            ),
           }}
         />
       )}
