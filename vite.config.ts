@@ -8,6 +8,8 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 1520,
+    // strictPort=true 让端口被占时 vite 直接退出而不是静默漂移，
+    // 避免 tauri 按 devUrl 去加载别的服务或空白页。
     strictPort: true,
     host: "127.0.0.1",
     hmr: { protocol: "ws", host: "127.0.0.1", port: 1521 },

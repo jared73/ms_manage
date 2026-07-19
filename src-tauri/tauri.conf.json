@@ -26,14 +26,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": {
-      "windows": ["nsis", "zip"]
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,15 +43,6 @@
     "longDescription": "MS Manage — MCP server 和 Skill 的统一管理工具。",
     "category": "DeveloperTool",
     "copyright": "",
-    "homepage": "https://github.com/local/ms-manage",
-    "windows": {
-      "nsis": {
-        "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine",
-        "languages": ["SimpChinese", "English"],
-        "displayLanguageSelector": true,
-        "startMenuFolder": "MS Manage"
-      }
-    }
+    "homepage": "https://github.com/local/ms-manage"
   }
 }
