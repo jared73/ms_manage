@@ -14,44 +14,59 @@ use crate::proxy::registry;
 use crate::state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use crate::storage::LogRecord;
 
 /// 写一条日志到 AppState.logs（GUI "日志" 页可见）
 fn log(level: &str, source: &str, message: String, detail: Option<String>) {
-    let log = LogRecord {
-        id: uuid::Uuid::new_v4().to_string(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        level: level.to_string(),
-        source: source.to_string(),
-        message,
-        detail,
-    };
-    if let Some(state) = crate::state::try_current() {
-        let mut logs = state.storage.logs.write();
-        logs.push(log);
-        if logs.len() > 5000 {
-            let drop = logs.len() - 5000;
-            logs.drain(0..drop);
-        }
-    }
+    super::log_event(level, source, message, detail);
 }
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
+/// 单个请求 body 上限：16MB。防止本机恶意/异常进程用巨大 Content-Length
+/// 触发超额分配或让连接 task 永久挂起。
+const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+/// 读取 body 的总超时
+const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub async fn run_http(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
-    // 监听 0.0.0.0（同时支持 IPv4 127.0.0.1 和 IPv6 [::1]），但默认配置给客户端的是 127.0.0.1
-    let listen_addr: SocketAddr = ([0, 0, 0, 0], port).into();
-    let listener = TcpListener::bind(&listen_addr).await?;
+    run_http_with_ready(state, port, None).await
+}
+
+/// 启动 HTTP 代理；`ready` 提供时，bind 成功后发 Ok(())，bind 失败发 Err，
+/// 调用方可以可靠地知道代理是否真正起来了（而不是靠 sleep 猜）。
+pub async fn run_http_with_ready(
+    state: Arc<AppState>,
+    port: u16,
+    ready: Option<tokio::sync::oneshot::Sender<anyhow::Result<u16>>>,
+) -> anyhow::Result<()> {
+    // 默认只监听 127.0.0.1，避免向局域网暴露 MCP proxy。
+    // 如需远程访问，后续可在设置中增加 "bind_address" 配置项。
+    let listen_addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let listener = match TcpListener::bind(&listen_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            if let Some(tx) = ready {
+                let _ = tx.send(Err(anyhow::anyhow!("bind 127.0.0.1:{port} 失败：{e}")));
+            }
+            return Err(anyhow::anyhow!("bind 127.0.0.1:{port} 失败：{e}"));
+        }
+    };
     let local = listener.local_addr().ok();
+    if let Some(tx) = ready {
+        let _ = tx.send(Ok(port));
+    }
     let initial_token = state.storage.load_settings()
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .mcp_token
         .clone()
         .unwrap_or_default();
-    eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?} (also reachable via 127.0.0.1:{port})");
-    eprintln!("[ms-manage] token (Authorization: Bearer ...): {initial_token}");
-    log("info", "proxy", format!("HTTP MCP proxy listening on 0.0.0.0:{port}"), None);
+    eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?}");
+    // token 只打印前 8 位供用户核对，完整 token 不会出现在日志中
+    // 用 chars 而非字节切片，避免非 ASCII token 在 char boundary 处 panic
+    let token_preview: String = initial_token.chars().take(8).collect();
+    eprintln!("[ms-manage] token preview (Authorization: Bearer ...): {token_preview}...");
+    log("info", "proxy", format!("HTTP MCP proxy listening on 127.0.0.1:{port}"), None);
 
     loop {
         let (stream, _peer) = listener.accept().await?;
@@ -112,7 +127,11 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
         .mcp_token
         .clone()
         .unwrap_or_default();
-    let token_ok = auth == format!("Bearer {expected_token}") || query_token == expected_token;
+    // 空 token 视为未配置：直接拒绝所有需要鉴权的请求，
+    // 避免 settings 里 mcp_token="" 时任何人都能裸连。
+    let bearer_ok = !expected_token.is_empty() && auth == format!("Bearer {expected_token}");
+    let query_ok = !expected_token.is_empty() && !query_token.is_empty() && query_token == expected_token;
+    let token_ok = bearer_ok || query_ok;
     if !token_ok {
         // 健康检查 / SSE endpoint / OPTIONS 都不需要 token（GET 试探开放）
         let (m2, p2) = {
@@ -126,6 +145,9 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
         {
             // 走下面的主路由（auth 仍记 MISSING 但不 401）
         } else {
+            let path_for_log = request_line.split_whitespace().nth(1).unwrap_or("")
+                .split('?').next().unwrap_or("").to_string();
+            log("warn", "proxy.http", format!("鉴权失败 401：{m2} {path_for_log}"), None);
             let _ = write_all(&mut write, b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n").await;
             return Ok(());
         }
@@ -139,14 +161,22 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
         let p = parts.next().unwrap_or("").to_string();
         (m, p)
     };
-    log("debug", "proxy.http", format!("{} {}", method, path), None);
-
-    // 记录请求路径（调试用）
-    eprintln!("[proxy] {} {} (auth={})", method, path,
-        if auth == format!("Bearer {expected_token}") || query_token == expected_token { "OK" } else { "MISSING" });
-
-    // 把 query string 从 path 里剥掉（`/mcp/sse?token=xxx` → `/mcp/sse`）
+    // 把 query string 从 path 里剥掉（`/mcp/sse?token=xxx` → `/mcp/sse`）。
+    // 注意：日志里只能出现 path_no_q —— path 含完整 query string，
+    // 而 `?token=xxx` 是支持的鉴权方式，落日志等于把 token 写进日志文件。
     let path_no_q = path.split('?').next().unwrap_or(&path).to_string();
+    log("debug", "proxy.http", format!("{} {}", method, path_no_q), None);
+    eprintln!("[proxy] {} {} (auth={})", method, path_no_q,
+        if token_ok { "OK" } else { "MISSING" });
+
+    // Content-Length 上限保护：超过 16MB 直接 413，
+    // 否则 vec![0u8; content_length] 会被本机任意进程用来 OOM。
+    if content_length > MAX_BODY_BYTES {
+        let _ = write_all(&mut write,
+            b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n").await;
+        log("warn", "proxy.http", format!("拒绝超大请求体：{} bytes (上限 {})", content_length, MAX_BODY_BYTES), None);
+        return Ok(());
+    }
 
     match (method.as_str(), path_no_q.as_str()) {
         ("POST", "/mcp") => {
@@ -156,7 +186,11 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
                 stats.last_request_at = Some(chrono::Utc::now().to_rfc3339());
             }
             let mut body = vec![0u8; content_length];
-            tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await?;
+            tokio::time::timeout(
+                BODY_READ_TIMEOUT,
+                tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body),
+            ).await
+                .map_err(|_| anyhow::anyhow!("读取请求体超时"))??;
             let body_str = String::from_utf8_lossy(&body).to_string();
             // 两种 transport 路径：
             //   1) 带 ?session_id=xxx → legacy SSE transport：
@@ -209,15 +243,19 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
                 stats.last_request_at = Some(chrono::Utc::now().to_rfc3339());
             }
             let mut body = vec![0u8; content_length];
-            let _ = tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await;
+            let _ = tokio::time::timeout(
+                BODY_READ_TIMEOUT,
+                tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body),
+            ).await;
             let body_str = String::from_utf8_lossy(&body).to_string();
-            eprintln!("[proxy] unknown POST path {}, treating as /mcp", path);
-            log("warn", "proxy.http", format!("未知 POST 路径 {}, 当 /mcp 处理", path), Some(body_str.chars().take(200).collect::<String>()));
+            eprintln!("[proxy] unknown POST path {}, treating as /mcp", path_no_q);
+            // 注意：body 不落日志 —— tool call 参数里可能含密钥。
+            log("warn", "proxy.http", format!("未知 POST 路径 {}, 当 /mcp 处理 ({} bytes)", path_no_q, body_str.len()), None);
             handle_jsonrpc(&state, &body_str, &mut write).await?;
         }
         _ => {
-            eprintln!("[proxy] unknown {} {}, returning 405", method, path);
-            log("warn", "proxy.http", format!("未知 {} {}, 返回 405", method, path), None);
+            eprintln!("[proxy] unknown {} {}, returning 405", method, path_no_q);
+            log("warn", "proxy.http", format!("未知 {} {}, 返回 405", method, path_no_q), None);
             let _ = write_all(&mut write,
                 b"HTTP/1.1 405 Method Not Allowed\r\nAccess-Control-Allow-Origin: *\r\nAllow: GET, POST, OPTIONS\r\nContent-Length: 0\r\n\r\n"
             ).await;
@@ -273,14 +311,18 @@ async fn handle_jsonrpc_to_string(state: &AppState, body: &str) -> anyhow::Resul
     let params = req.get("params").cloned().unwrap_or(serde_json::Value::Null);
 
     let resp = match method.as_str() {
-        "initialize" => Some(serde_json::json!({
-            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-            "result": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
-            }
-        })),
+        "initialize" => {
+            let client = params.get("clientInfo").and_then(|c| c.get("name")).and_then(|n| n.as_str()).unwrap_or("unknown");
+            log("info", "mcp", format!("客户端 initialize：{client}"), None);
+            Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+                }
+            }))
+        }
         "ping" => Some(jsonrpc_ok(id, serde_json::json!({}))),
         "tools/list" => Some(http_tools_list(state, id).await),
         "tools/call" => Some(http_tools_call(state, id, params).await),
@@ -305,6 +347,7 @@ async fn serve_sse_session<W: tokio::io::AsyncWrite + Unpin>(
     let session_id = uuid::Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     crate::proxy::sessions().insert(session_id.clone(), tx).await;
+    log("info", "client", format!("SSE 客户端已连接（session {}）", &session_id[..8]), None);
 
     let _ = write_all(write,
         b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n"
@@ -328,6 +371,7 @@ async fn serve_sse_session<W: tokio::io::AsyncWrite + Unpin>(
         }
     }
     crate::proxy::sessions().remove(&session_id).await;
+    log("info", "client", format!("SSE 客户端已断开（session {}）", &session_id[..8]), None);
     Ok(())
 }
 
@@ -343,14 +387,18 @@ async fn handle_jsonrpc<W: tokio::io::AsyncWrite + Unpin>(
     let params = req.get("params").cloned().unwrap_or(serde_json::Value::Null);
 
     let resp = match method.as_str() {
-        "initialize" => Some(serde_json::json!({
-            "jsonrpc": "2.0", "id": id.clone().unwrap_or(serde_json::Value::Null),
-            "result": {
-                "protocolVersion": "2025-03-26",
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
-            }
-        })),
+        "initialize" => {
+            let client = params.get("clientInfo").and_then(|c| c.get("name")).and_then(|n| n.as_str()).unwrap_or("unknown");
+            log("info", "mcp", format!("客户端 initialize：{client}"), None);
+            Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id.clone().unwrap_or(serde_json::Value::Null),
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "serverInfo": { "name": "ms-manage-http-proxy", "version": env!("CARGO_PKG_VERSION") }
+                }
+            }))
+        }
         "ping" => Some(jsonrpc_ok(id.clone(), serde_json::json!({}))),
         "tools/list" => Some(http_tools_list(state, id.clone()).await),
         "tools/call" => Some(http_tools_call(state, id.clone(), params).await),
@@ -465,30 +513,45 @@ async fn http_tools_call(state: &AppState, id: Option<serde_json::Value>, params
     });
     use tokio::io::AsyncWriteExt;
     if let Err(e) = child.stdin.write_all(format!("{}\n", req).as_bytes()).await {
+        log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 写入失败：{e}"), None);
         return serde_json::json!({
             "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
             "error": { "code": -32603, "message": format!("write: {e}") }
         });
     }
     let _ = child.stdin.flush().await;
-    let mut line = String::new();
-    let read = tokio::time::timeout(std::time::Duration::from_secs(120), child.stdout.read_line(&mut line)).await;
+    let read = crate::proxy::read_response_from_child(
+        &mut child,
+        std::time::Duration::from_secs(120),
+    ).await;
     match read {
-        Ok(Ok(_)) => match serde_json::from_str::<serde_json::Value>(line.trim()) {
-            Ok(mut v) => {
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("id".into(), id.unwrap_or(serde_json::Value::Null));
-                }
-                v
+        Ok(Some((_id, mut v))) => {
+            let is_err = v.get("error").is_some()
+                || v.get("result").and_then(|r| r.get("isError")).and_then(|b| b.as_bool()).unwrap_or(false);
+            log("debug", "mcp.tools", format!("tools/call {server_name}__{tool_name} {}", if is_err { "→ 错误" } else { "→ 成功" }), None);
+            // 把子 server 的 id 替换成 client 的 id
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("id".into(), id.unwrap_or(serde_json::Value::Null));
             }
-            Err(e) => serde_json::json!({
+            v
+        }
+        Ok(None) => {
+            log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 子进程已关闭"), None);
+            serde_json::json!({
                 "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-                "error": { "code": -32603, "message": format!("invalid response: {e}") }
-            }),
-        },
-        _ => serde_json::json!({
+                "error": { "code": -32603, "message": format!("{server_name} 子进程已关闭") }
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 超时"), None);
+            serde_json::json!({
+                "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                "error": { "code": -32603, "message": "timeout" }
+            })
+        }
+        Err(e) => serde_json::json!({
             "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-            "error": { "code": -32603, "message": "timeout" }
+            "error": { "code": -32603, "message": format!("read {server_name}: {e}") }
         }),
     }
 }

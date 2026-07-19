@@ -38,6 +38,27 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+/// 写一条日志到 AppState.logs（GUI "日志" 页可见）。
+/// 全局可用：proxy 核心、HTTP 连接层、stdio 转发都走这里。
+pub(crate) fn log_event(level: &str, source: &str, message: String, detail: Option<String>) {
+    let rec = crate::storage::LogRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        level: level.to_string(),
+        source: source.to_string(),
+        message,
+        detail,
+    };
+    if let Some(state) = crate::state::try_current() {
+        let mut logs = state.storage.logs.write();
+        logs.push(rec);
+        if logs.len() > 5000 {
+            let drop = logs.len() - 5000;
+            logs.drain(0..drop);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ServerStatus {
@@ -67,10 +88,76 @@ pub struct ChildServer {
     pub child: Child,
     pub stdin: tokio::process::ChildStdin,
     pub stdout: BufReader<tokio::process::ChildStdout>,
+    /// stderr 在 spawn 后立即被 `drain_stderr` 接管为后台任务；
+    /// 这里保留 Option 让调用方知道 stderr 是否成功接管。
     pub stderr: Option<tokio::process::ChildStderr>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub tools: Vec<serde_json::Value>, // 缓存 tools/list 结果
     pub next_id: u64,
+    /// 已经从 stdout 读出但还没匹配的 JSON-RPC 帧缓冲。
+    /// 用于过滤 server 在响应前发的 notification / 日志行。
+    pub pending: std::collections::VecDeque<String>,
+}
+
+/// 后台消费子进程 stderr 直至 EOF，避免 pipe 满阻塞子进程。
+/// 行级日志只在 RUST_LOG/MS_MANAGE_DEBUG 下输出。
+fn drain_stderr(label: String, stderr: tokio::process::ChildStderr) {
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if !line.is_empty() {
+                eprintln!("[mcp:{label}!] {line}");
+            }
+        }
+    });
+}
+
+/// 从子 server 读取一行 JSON-RPC，过滤掉无 id 的 notification / 日志行。
+/// 一直读到 (1) 拿到带 id 的帧，(2) EOF，(3) 超时。
+/// 超时返回 `Err(io::Error)`，EOF 返回 `Ok(None)`，正常帧返回 `Ok(Some((id, json)))`。
+async fn read_response_line(
+    stdout: &mut BufReader<tokio::process::ChildStdout>,
+    pending: &mut std::collections::VecDeque<String>,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<(serde_json::Value, serde_json::Value)>> {
+    loop {
+        // 先看缓冲里有没有匹配的
+        while let Some(line) = pending.pop_front() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() { continue; }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if v.get("id").is_some() {
+                    return Ok(Some((v.get("id").cloned().unwrap_or(serde_json::Value::Null), v)));
+                }
+                // notification / 进度 / 日志行 → 丢弃，继续
+            }
+        }
+        // 缓冲空，从 stdout 读一行
+        let mut line = String::new();
+        let read = tokio::time::timeout(timeout, stdout.read_line(&mut line)).await;
+        match read {
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "read response timed out",
+                ));
+            }
+            Ok(Ok(0)) => return Ok(None),
+            Ok(Ok(_)) => {
+                pending.push_back(line);
+            }
+            Ok(Err(e)) => return Err(e),
+        }
+    }
+}
+
+/// 同 read_response_line，但接受 ChildServer 并按引用一次性借用 stdout + pending。
+async fn read_response_from_child(
+    srv: &mut ChildServer,
+    timeout: std::time::Duration,
+) -> std::io::Result<Option<(serde_json::Value, serde_json::Value)>> {
+    read_response_line(&mut srv.stdout, &mut srv.pending, timeout).await
 }
 
 impl ChildServer {
@@ -155,10 +242,6 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     if srv.transport != "stdio" {
         anyhow::bail!("proxy currently only supports stdio children, got '{}'", srv.transport);
     }
-    // 依赖包管理器（npx/uvx 等）的 server 必须先预装，避免每次启动临时下载
-    if crate::cmd_install::detect_pkg(srv).is_some() && !srv.installed {
-        anyhow::bail!("此 server 需要先预装包，请在「服务」页面点击「安装」按钮（依赖包：{}）", srv.command.as_deref().unwrap_or(""));
-    }
     let cmd_str = srv.command.as_deref().ok_or_else(|| anyhow::anyhow!("command is required"))?;
     if cmd_str.trim().is_empty() {
         anyhow::bail!("command 字段为空，请在编辑对话框中填写可执行文件路径（如 npx、uvx、python 等）");
@@ -197,12 +280,13 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     };
     if let Some(cwd) = &srv.cwd { c.current_dir(cwd); }
     for (k, v) in &srv.env { c.env(k, v); }
-    inject_npm_registry(&mut c);
+    inject_npm_registry(&mut c, &srv.env);
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     c.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut c);
     let mut child = c.spawn().map_err(|e| {
         let friendly = crate::diagnose::friendly_spawn_error(cmd_str, &e);
+        log_event("warn", "server", format!("server「{}」启动失败：{friendly}", srv.name), None);
         if let Some(st) = crate::state::try_current() {
             st.storage.live_states.write().insert(srv.id.clone(), ServerStatus::Error.as_str().to_string());
         }
@@ -212,6 +296,10 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
     let stderr = child.stderr.take();
+    // 立即接管 stderr 到后台 drain，否则大量 banner/日志会撑满 pipe 阻塞子进程。
+    if let Some(se) = stderr {
+        drain_stderr(srv.name.clone(), se);
+    }
 
     let mut child_srv = ChildServer {
         id: srv.id.clone(),
@@ -219,15 +307,17 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
         child,
         stdin,
         stdout: BufReader::new(stdout),
-        stderr,
+        stderr: None, // 已被 drain_stderr 接管
         started_at: chrono::Utc::now(),
         tools: Vec::new(),
         next_id: 0,
+        pending: std::collections::VecDeque::new(),
     };
 
     // initialize handshake
+    let init_id_num = child_srv.next_id();
     let init_req = serde_json::json!({
-        "jsonrpc": "2.0", "id": child_srv.next_id(), "method": "initialize",
+        "jsonrpc": "2.0", "id": init_id_num, "method": "initialize",
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
@@ -236,16 +326,17 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     });
     child_srv.stdin.write_all(format!("{}\n", init_req).as_bytes()).await?;
     child_srv.stdin.flush().await?;
-    let mut line = String::new();
-    let read = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        child_srv.stdout.read_line(&mut line),
-    ).await;
-    if read.is_err() || line.trim().is_empty() {
-        anyhow::bail!("initialize timed out or empty response: {line:?}");
+    let init_id = serde_json::json!(init_id_num);
+    let read = read_response_from_child(&mut child_srv, std::time::Duration::from_secs(15)).await;
+    match read {
+        Ok(Some((id, _))) if id == init_id => {} // ok
+        Ok(Some((id, _))) => anyhow::bail!("initialize 响应 id 不匹配：期望 {init_id}，实际 {id}"),
+        Ok(None) => anyhow::bail!("initialize: 子进程已关闭"),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            anyhow::bail!("initialize 超时")
+        }
+        Err(e) => anyhow::bail!("initialize 读取失败：{e}"),
     }
-    let _: serde_json::Value = serde_json::from_str(line.trim())
-        .map_err(|e| anyhow::anyhow!("invalid initialize response: {e}: {line}"))?;
 
     // 发送 initialized notification
     let notif = serde_json::json!({
@@ -255,18 +346,15 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     child_srv.stdin.flush().await?;
 
     // 拉取 tools/list 缓存
+    let list_id_num = child_srv.next_id();
     let list_req = serde_json::json!({
-        "jsonrpc": "2.0", "id": child_srv.next_id(), "method": "tools/list", "params": {}
+        "jsonrpc": "2.0", "id": list_id_num, "method": "tools/list", "params": {}
     });
     child_srv.stdin.write_all(format!("{}\n", list_req).as_bytes()).await?;
     child_srv.stdin.flush().await?;
-    let mut line = String::new();
-    let read = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        child_srv.stdout.read_line(&mut line),
-    ).await;
-    if let Ok(Ok(_)) = read {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+    let list_id = serde_json::json!(list_id_num);
+    if let Ok(Some((id, v))) = read_response_from_child(&mut child_srv, std::time::Duration::from_secs(15)).await {
+        if id == list_id {
             if let Some(tools) = v.get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array()) {
                 child_srv.tools = tools.clone();
             }
@@ -274,11 +362,15 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     }
 
     let id = srv.id.clone();
-    Ok(registry().insert(id, child_srv).await)
+    let tool_count = child_srv.tools.len();
+    let arc = registry().insert(id, child_srv).await;
+    log_event("info", "server", format!("server「{}」已启动（{} 个工具）", srv.name, tool_count), None);
+    Ok(arc)
 }
 
-/// 读取 settings，给 stdio child 注入 NPM_CONFIG_REGISTRY / UV_INDEX_URL 等加速环境变量
-fn inject_npm_registry(c: &mut Command) {
+/// 读取 settings，给 stdio child 注入 NPM_CONFIG_REGISTRY / UV_INDEX_URL 等加速环境变量。
+/// `user_env` 是 server 配置里用户显式设置的 env —— 注入**不覆盖**这些值。
+fn inject_npm_registry(c: &mut Command, user_env: &HashMap<String, String>) {
     let Some(state) = crate::state::try_current() else { return; };
     let Ok(settings) = state.storage.load_settings() else { return; };
     let cmd_path = c.as_std().get_program();
@@ -289,17 +381,36 @@ fn inject_npm_registry(c: &mut Command) {
     if matches!(stem.as_str(), "npx" | "npm" | "pnpm" | "pnpx" | "yarn" | "bun" | "bunx" | "node") {
         if settings.auto_inject_npm_registry {
             let npm_registry = settings.npm_registry.trim();
-            if !npm_registry.is_empty() {
+            if !npm_registry.is_empty()
+                && !user_env.contains_key("NPM_CONFIG_REGISTRY")
+                && !user_env.contains_key("npm_config_registry")
+            {
                 c.env("NPM_CONFIG_REGISTRY", npm_registry);
                 c.env("npm_config_registry", npm_registry);
                 c.env("npm_registry", npm_registry);
             }
+            // 浏览器二进制下载镜像（playwright/puppeteer），用户显式配置优先
+            for (k, v) in [
+                ("PLAYWRIGHT_DOWNLOAD_HOST", "https://registry.npmmirror.com/-/binary/playwright"),
+                ("PLAYWRIGHT_DOWNLOAD_HOST_TEMPLATE", "https://registry.npmmirror.com/-/binary/playwright"),
+                ("PUPPETEER_DOWNLOAD_BASE_URL", "https://registry.npmmirror.com/-/binary/chrome-for-testing"),
+                ("PUPPETEER_DOWNLOAD_HOST", "https://registry.npmmirror.com/-/binary/chrome-for-testing"),
+            ] {
+                if !user_env.contains_key(k) {
+                    c.env(k, v);
+                }
+            }
         }
     }
-    // uv 加速（Python MCP server）
+    // uv 加速（Python MCP server）：用户显式配置优先
     if matches!(stem.as_str(), "uv" | "uvx") {
-        c.env("UV_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
-        c.env("PIP_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
+        let mirror = "https://mirrors.aliyun.com/pypi/simple/";
+        if !user_env.contains_key("UV_INDEX_URL") {
+            c.env("UV_INDEX_URL", mirror);
+        }
+        if !user_env.contains_key("PIP_INDEX_URL") {
+            c.env("PIP_INDEX_URL", mirror);
+        }
     }
 }
 
@@ -323,7 +434,9 @@ pub async fn stop_all() {
 pub async fn stop(id: &str) {
     if let Some(srv) = registry().remove(id).await {
         let mut s = srv.lock().await;
+        let name = s.name.clone();
         let _ = s.child.kill().await;
+        log_event("info", "server", format!("server「{name}」已停止"), None);
     }
     if let Some(st) = crate::state::try_current() {
         st.storage.live_states.write().insert(id.to_string(), ServerStatus::Stopped.as_str().to_string());
@@ -334,9 +447,6 @@ pub async fn stop(id: &str) {
 pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, String> {
     if s.transport != "stdio" {
         return Err(format!("only stdio is supported ({} transport)", s.transport));
-    }
-    if crate::cmd_install::detect_pkg(s).is_some() && !s.installed {
-        return Err(format!("请先在「服务」页面点击「安装」（依赖包管理器：{}）", s.command.as_deref().unwrap_or("")));
     }
     let cmd_str = s.command.as_deref().filter(|c| !c.is_empty())
         .ok_or_else(|| "command is empty".to_string())?;
@@ -368,14 +478,18 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     };
     if let Some(cwd) = &s.cwd { command.current_dir(cwd); }
     for (k, v) in &s.env { command.env(k, v); }
-    inject_npm_registry(&mut command);
+    inject_npm_registry(&mut command, &s.env);
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     command.kill_on_drop(true);
     crate::process_util::apply_no_window(&mut command);
     let mut c = command.spawn().map_err(|e| format!("spawn failed: {e}"))?;
     let mut stdin = c.stdin.take().ok_or_else(|| "no stdin".to_string())?;
     let stdout = c.stdout.take().ok_or_else(|| "no stdout".to_string())?;
+    if let Some(se) = c.stderr.take() {
+        drain_stderr(s.name.clone(), se);
+    }
     let mut reader = BufReader::new(stdout);
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
     let init = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -387,8 +501,15 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     });
     stdin.write_all(format!("{}\n", init).as_bytes()).await.map_err(|e| format!("write init: {e}"))?;
     stdin.flush().await.ok();
-    let mut buf = String::new();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), reader.read_line(&mut buf)).await;
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
+    ).await;
+    let init_ok = matches!(read, Ok(Ok(Some((ref id, _)))) if *id == serde_json::json!(1));
+    if !init_ok {
+        let _ = c.kill().await;
+        return Err("initialize 未收到有效响应（可能子进程启动失败或 stdout 输出非 JSON-RPC 内容）".to_string());
+    }
     // notifications/initialized（一些 server 需要）
     let notif = serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"});
     let _ = stdin.write_all(format!("{}\n", notif).as_bytes()).await;
@@ -397,14 +518,18 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     let list = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}});
     stdin.write_all(format!("{}\n", list).as_bytes()).await.map_err(|e| format!("write list: {e}"))?;
     stdin.flush().await.ok();
-    buf.clear();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), reader.read_line(&mut buf)).await;
+    let read2 = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
+    ).await;
     let _ = c.kill().await;
 
-    let tools: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&buf).ok()
-        .and_then(|v| v.get("result").and_then(|r| r.get("tools")).cloned())
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let tools: Vec<serde_json::Value> = match read2 {
+        Ok(Ok(Some((_id, v)))) => v.get("result").and_then(|r| r.get("tools")).cloned()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     Ok(tools)
 }
 
@@ -412,9 +537,6 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
 pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     if s.transport != "stdio" {
         return Ok(serde_json::json!({ "ok": false, "error": format!("only stdio is testable in MVP ({} transport)", s.transport) }));
-    }
-    if crate::cmd_install::detect_pkg(s).is_some() && !s.installed {
-        return Ok(serde_json::json!({ "ok": false, "error": "请先在「服务」页面点击「安装」" }));
     }
     let cmd_str = match s.command.as_deref() {
         Some(c) if !c.is_empty() => c,
@@ -456,7 +578,11 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     };
     let mut stdin = c.stdin.take().ok_or_else(|| "stdin".to_string())?;
     let stdout = c.stdout.take().ok_or_else(|| "stdout".to_string())?;
+    if let Some(se) = c.stderr.take() {
+        drain_stderr(s.name.clone(), se);
+    }
     let mut reader = BufReader::new(stdout);
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
     let init = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -468,15 +594,21 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     });
     let _ = stdin.write_all(format!("{}\n", init).as_bytes()).await;
     let _ = stdin.flush().await;
-    let mut buf = String::new();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), reader.read_line(&mut buf)).await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
+    ).await;
     let list = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
     let _ = stdin.write_all(format!("{}\n", list).as_bytes()).await;
     let _ = stdin.flush().await;
-    buf.clear();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), reader.read_line(&mut buf)).await;
-    let tools_val: Option<serde_json::Value> = serde_json::from_str(&buf).ok()
-        .and_then(|v: serde_json::Value| v.get("result").and_then(|r| r.get("tools")).cloned());
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
+    ).await;
+    let tools_val: Option<serde_json::Value> = match read {
+        Ok(Ok(Some((_id, v)))) => v.get("result").and_then(|r| r.get("tools")).cloned(),
+        _ => None,
+    };
     let _ = c.kill().await;
     let ms = started.elapsed().as_millis() as u64;
     Ok(serde_json::json!({
@@ -510,24 +642,30 @@ pub async fn start(_app: &AppHandle, _state: &Arc<crate::state::AppState>) -> an
     let settings = st.storage.load_settings()?;
     let port = settings.proxy_http_port;
     let state = st.clone();
+    // oneshot：run_http bind 成功/失败都会通知，避免“sleep 200ms 后假装已启动”
+    let (tx, rx) = tokio::sync::oneshot::channel::<anyhow::Result<u16>>();
     // 后台 task 跑 HTTP 代理
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::proxy::connect::run_http(state.clone(), port).await {
+        if let Err(e) = crate::proxy::connect::run_http_with_ready(state.clone(), port, Some(tx)).await {
             eprintln!("[proxy] HTTP proxy error: {e}");
             let mut stats = state.storage.proxy_stats.write();
             stats.running = false;
         }
     });
-    // 给前端一点时间 listen
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    {
-        let mut stats = st.storage.proxy_stats.write();
-        stats.running = true;
-        stats.started_at = Some(chrono::Utc::now().to_rfc3339());
-        stats.connected_clients = 0;
-        stats.total_requests = 0;
+    // 等 bind 结果（最多 5s；正常是毫秒级）
+    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+        Ok(Ok(Ok(_port))) => {
+            let mut stats = st.storage.proxy_stats.write();
+            stats.running = true;
+            stats.started_at = Some(chrono::Utc::now().to_rfc3339());
+            stats.connected_clients = 0;
+            stats.total_requests = 0;
+            Ok(())
+        }
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(_)) => anyhow::bail!("代理启动任务异常退出（未收到 bind 结果）"),
+        Err(_) => anyhow::bail!("等待代理 bind 超时"),
     }
-    Ok(())
 }
 
 /// 由 Tauri command 调用：根据 server id 在 GUI 内启动单个子 server（不暴露给 Claude Desktop，仅用作调试/单 server 管理）

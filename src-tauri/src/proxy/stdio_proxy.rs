@@ -179,24 +179,23 @@ async fn handle_tools_call(storage: &Storage, id: Option<Value>, params: Value) 
         return jsonrpc_error(id, -32603, format!("flush {server_name}: {e}"));
     }
 
-    // 读取响应（带超时）
-    let mut line = String::new();
-    let read = tokio::time::timeout(
+    // 读取响应（带超时）。过滤掉子 server 在响应前发的 notification / 日志行。
+    let read = super::read_response_from_child(
+        &mut child,
         std::time::Duration::from_secs(120),
-        child.stdout.read_line(&mut line),
     ).await;
     match read {
-        Ok(Ok(_)) => match serde_json::from_str::<Value>(line.trim()) {
-            Ok(mut v) => {
-                // 把子 server 的 id 替换成 client 的 id
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("id".into(), id.clone().unwrap_or(Value::Null));
-                }
-                Some(v)
+        Ok(Some((_id, mut v))) => {
+            // 把子 server 的 id 替换成 client 的 id
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("id".into(), id.clone().unwrap_or(Value::Null));
             }
-            Err(e) => jsonrpc_error(id, -32603, format!("invalid response from {server_name}: {e}")),
-        },
-        Ok(Err(e)) => jsonrpc_error(id, -32603, format!("read {server_name}: {e}")),
-        Err(_) => jsonrpc_error(id, -32603, format!("timeout waiting for {server_name}")),
+            Some(v)
+        }
+        Ok(None) => jsonrpc_error(id, -32603, format!("{server_name} 子进程已关闭")),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            jsonrpc_error(id, -32603, format!("timeout waiting for {server_name}"))
+        }
+        Err(e) => jsonrpc_error(id, -32603, format!("read {server_name}: {e}")),
     }
 }
