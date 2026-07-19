@@ -2,12 +2,46 @@ use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod servers;
 pub mod skills;
 pub mod logs;
+
+/// 把 `contents` 原子写到 `path`：先写临时文件 + fsync，再 rename 到目标。
+/// 避免写入中途崩溃/断电导致文件截断（之前直接 `std::fs::write` 容易出现 0 字节或半截文件）。
+pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().context("atomic_write: path has no parent")?;
+    std::fs::create_dir_all(parent).context("atomic_write: create parent")?;
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("tmp")
+    ));
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp).context("atomic_write: create tmp")?;
+        f.write_all(contents).context("atomic_write: write tmp")?;
+        f.sync_all().ok();
+    }
+    // rename 在同一文件系统上是原子的；Windows 下若目标已存在，需要先 remove。
+    #[cfg(windows)]
+    {
+        if path.exists() {
+            // 把旧的 rename 成备份再覆盖，失败时回滚。
+            let backup = path.with_extension("bak");
+            let _ = std::fs::remove_file(&backup);
+            let _ = std::fs::rename(path, &backup);
+        }
+    }
+    std::fs::rename(&tmp, path).context("atomic_write: rename")?;
+    Ok(())
+}
+
+pub fn atomic_write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value).context("serialize json")?;
+    atomic_write(path, &bytes)
+}
 pub mod projects;
 
 pub use logs::LogRecord;
@@ -223,11 +257,15 @@ pub struct ProxyStats {
 
 pub type LiveStatesMap = HashMap<String, String>; // id -> status str
 
+#[derive(Clone)]
 pub struct Storage {
     pub root: PathBuf,
     pub live_states: Arc<RwLock<LiveStatesMap>>,
     pub logs: Arc<RwLock<Vec<LogRecord>>>,
     pub proxy_stats: Arc<RwLock<ProxyStats>>,
+    /// servers.json 文件读写互斥锁。
+    /// 保护所有对 servers.json 的整体读-改-写，避免后台迁移与 GUI 写回互相覆盖。
+    pub servers_lock: Arc<RwLock<()>>,
 }
 
 impl Storage {
@@ -239,6 +277,7 @@ impl Storage {
             live_states: Arc::new(RwLock::new(HashMap::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
             proxy_stats: Arc::new(RwLock::new(ProxyStats::default())),
+            servers_lock: Arc::new(RwLock::new(())),
         };
         // 一次性把老的单 .md skill 迁移到目录制
         skills::migrate_legacy_flat_files(&storage.skills_dir()).ok();
@@ -258,11 +297,30 @@ impl Storage {
     pub fn log_file(&self) -> PathBuf { self.root.join("logs.json") }
 
     pub fn load_servers(&self) -> Result<Vec<StoredServer>> {
+        let _guard = self.servers_lock.read();
         servers::load(&self.servers_file())
     }
     pub fn save_servers(&self, list: &[StoredServer]) -> Result<()> {
+        let _guard = self.servers_lock.write();
         servers::save(&self.servers_file(), list)
     }
+
+    /// 原子地 读-改-写 单条 server 记录：整个过程持有写锁，
+    /// 避免 load→mutate→save 三步之间被另一个任务覆盖（丢失更新）。
+    /// 返回 false 表示找不到对应 id。
+    pub fn mutate_server<F: FnOnce(&mut StoredServer)>(&self, id: &str, f: F) -> Result<bool> {
+        let _guard = self.servers_lock.write();
+        let mut list = servers::load(&self.servers_file())?;
+        let Some(slot) = list.iter_mut().find(|s| s.id == id) else {
+            return Ok(false);
+        };
+        f(slot);
+        slot.updated_at = chrono::Utc::now().to_rfc3339();
+        servers::save(&self.servers_file(), &list)?;
+        Ok(true)
+    }
+
+
     pub fn load_skills(&self) -> Result<Vec<StoredSkill>> {
         skills::load_all(&self.skills_dir())
     }
@@ -287,32 +345,42 @@ impl Storage {
         let p = self.settings_file();
         if !p.exists() {
             let d = StoredSettings::default();
-            let json = serde_json::to_string_pretty(&d)?;
-            std::fs::write(&p, json)?;
+            atomic_write_json(&p, &d)?;
             return Ok(d);
         }
         let raw = std::fs::read_to_string(&p)?;
-        let mut s: StoredSettings = serde_json::from_str(&raw).unwrap_or_default();
+        // 解析失败：不要静默回退默认（会重新生成 mcp_token，让客户端全部失联）。
+        // 备份损坏文件为 .corrupt，然后用默认值起步，mcp_token 保留为 None
+        // 让下面的补生成逻辑只在“真没有 token”时触发。
+        let mut s: StoredSettings = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                let corrupt = p.with_extension("corrupt");
+                let _ = std::fs::copy(&p, &corrupt);
+                eprintln!("[storage] settings.json 解析失败（{e}），已备份到 {}，使用默认设置重新生成",
+                    corrupt.display());
+                StoredSettings { mcp_token: None, ..StoredSettings::default() }
+            }
+        };
         // 主题向后兼容：dark/system/未知 → purple，light → light
         s.theme = match s.theme.as_str() {
             "purple" | "midnight" | "forest" | "light" => s.theme.clone(),
             _ => "purple".into(),
         };
-        if s.mcp_token.is_none() {
-            s.mcp_token = Some(StoredSettings::default().mcp_token.unwrap_or_default());
-            let _ = std::fs::write(&p, serde_json::to_string_pretty(&s)?);
+        if s.mcp_token.as_deref().map(|t| t.is_empty()).unwrap_or(true) {
+            s.mcp_token = Some(generate_token());
+            let _ = atomic_write_json(&p, &s);
         }
         // 合并缺失的 builtin 目标（用户升级后能自动拿到新加的预设）
         let before = s.skill_targets.len();
         merge_builtin_skill_targets(&mut s.skill_targets);
         if s.skill_targets.len() != before {
-            let _ = std::fs::write(&p, serde_json::to_string_pretty(&s)?);
+            let _ = atomic_write_json(&p, &s);
         }
         Ok(s)
     }
     pub fn save_settings(&self, s: &StoredSettings) -> Result<()> {
-        let json = serde_json::to_string_pretty(s)?;
-        std::fs::write(self.settings_file(), json)?;
+        atomic_write_json(&self.settings_file(), s)?;
         Ok(())
     }
 }

@@ -1,32 +1,232 @@
-//! Windows 进程创建辅助
+//! 跨平台进程创建辅助
 //!
-//! 关键问题：`.cmd/.bat/.ps1` 文件被 cmd.exe 解释时会 allocate console 闪窗。
+//! Windows 关键问题：`.cmd/.bat/.ps1` 文件被 cmd.exe 解释时会 allocate console 闪窗。
 //! 解决：读 `.cmd` 文件内容，找出它真正调用的 `.exe`（如 `node.exe npx-cli.js`），
 //! 直接 spawn 那个 `.exe`，绕过 cmd.exe。
+//!
+//! macOS / Linux：npx / uvx 等是 shebang 脚本或原生二进制，直接按 PATH 查找即可。
 
 use std::path::PathBuf;
-use tokio::process::Command;
+use anyhow::Context;
+use tokio::io::AsyncBufReadExt;
+use tokio::process::Command as TokioCommand;
 
 /// 创建进程时用的无窗口标志
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(windows)]
-pub fn apply_no_window(cmd: &mut Command) {
+pub fn apply_no_window(cmd: &mut TokioCommand) {
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 #[cfg(not(windows))]
-pub fn apply_no_window(_cmd: &mut Command) {}
+pub fn apply_no_window(_cmd: &mut TokioCommand) {}
 
-/// PATH 解析：`npx` → `C:\...\npx.cmd`
+/// 判断是否需要走 `cmd.exe /c` 包装（tokio/std 通用）。
+#[cfg(windows)]
+fn needs_cmd_wrapper(path: &std::path::Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .map_or(false, |e| e == "cmd" || e == "bat" || e == "ps1")
+}
+
+
+/// 构建一个 tokio::process::Command。
+/// 自动完成 PATH 解析、Windows cmd.exe /c 包装、CREATE_NO_WINDOW、stdin/stdout/stderr pipe。
+pub fn build_tokio_command(prog: &str, args: &[String]) -> TokioCommand {
+    let resolved = resolve_cmd(prog);
+    #[cfg(windows)]
+    let mut c = if needs_cmd_wrapper(&resolved) {
+        let mut c = TokioCommand::new("cmd.exe");
+        c.arg("/c").arg(&resolved);
+        c.args(args);
+        c
+    } else {
+        let mut c = TokioCommand::new(&resolved);
+        c.args(args);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = TokioCommand::new(&resolved);
+    #[cfg(not(windows))]
+    {
+        c.args(args);
+    }
+    c.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        apply_no_window(&mut c);
+    }
+    // npm/uv 类命令注入国内镜像（安装/探测/运行统一走这里）
+    inject_registry_env(&mut c, prog);
+    c
+}
+
+/// 异步执行命令并返回 stdout。
+pub async fn run_capture(prog: &str, args: &[&str]) -> anyhow::Result<Vec<u8>> {
+    let out = build_tokio_command(prog, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .output()
+        .await
+        .with_context(|| format!("spawn {prog} 失败"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("{} 退出码 {:?}: {}", prog, out.status.code(), stderr.trim());
+    }
+    Ok(out.stdout)
+}
+
+/// 浏览器/二进制下载镜像（npmmirror 二进制源）。
+/// 解决 playwright/puppeteer 等包安装时下载浏览器走 googleapis 被墙/慢的问题。
+const PLAYWRIGHT_MIRROR: &str = "https://registry.npmmirror.com/-/binary/playwright";
+const CHROME_FOR_TESTING_MIRROR: &str = "https://registry.npmmirror.com/-/binary/chrome-for-testing";
+
+/// 浏览器下载镜像的 env 键值对（playwright / puppeteer 共用一组）。
+fn browser_mirror_envs() -> [(&'static str, &'static str); 4] {
+    [
+        ("PLAYWRIGHT_DOWNLOAD_HOST", PLAYWRIGHT_MIRROR),
+        // playwright 旧版本变量
+        ("PLAYWRIGHT_DOWNLOAD_HOST_TEMPLATE", PLAYWRIGHT_MIRROR),
+        ("PUPPETEER_DOWNLOAD_BASE_URL", CHROME_FOR_TESTING_MIRROR),
+        // puppeteer 旧版本变量
+        ("PUPPETEER_DOWNLOAD_HOST", CHROME_FOR_TESTING_MIRROR),
+    ]
+}
+
+/// 给 npm/uv 类命令注入国内镜像加速环境变量。
+/// 读取 settings；`auto_inject_npm_registry` 开启时给 Node 包管理器注入 NPM_CONFIG_REGISTRY，
+/// 并注入 playwright/puppeteer 浏览器下载镜像；给 uv/uvx 注入 UV_INDEX_URL / PIP_INDEX_URL。
+/// 安装 / 探测 / 运行 server 都走这里，保证国内机器一致性。
+pub fn inject_registry_env(c: &mut TokioCommand, prog: &str) {
+    let Some(state) = crate::state::try_current() else { return; };
+    let Ok(settings) = state.storage.load_settings() else { return; };
+    let stem = std::path::Path::new(prog)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Node.js 包管理器加速（默认淘宝镜像）+ 浏览器二进制镜像
+    if matches!(stem.as_str(), "npx" | "npm" | "pnpm" | "pnpx" | "yarn" | "bun" | "bunx" | "node")
+        && settings.auto_inject_npm_registry
+    {
+        let npm_registry = settings.npm_registry.trim();
+        if !npm_registry.is_empty() {
+            c.env("NPM_CONFIG_REGISTRY", npm_registry);
+            c.env("npm_config_registry", npm_registry);
+            c.env("npm_registry", npm_registry);
+        }
+        for (k, v) in browser_mirror_envs() {
+            c.env(k, v);
+        }
+    }
+    // uv 加速（Python MCP server）
+    if matches!(stem.as_str(), "uv" | "uvx") {
+        let mirror = "https://mirrors.aliyun.com/pypi/simple/";
+        c.env("UV_INDEX_URL", mirror);
+        c.env("PIP_INDEX_URL", mirror);
+    }
+}
+
+
+/// 异步执行命令并返回完整 Output，不因非零退出码报错。
+/// 用于「非零退出码本身是合法结果」的探测场景（如 `npm ls -g <pkg>` 对未安装包返回 1）。
+pub async fn run_capture_output(prog: &str, args: &[&str]) -> anyhow::Result<std::process::Output> {
+    build_tokio_command(prog, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .output()
+        .await
+        .with_context(|| format!("spawn {prog} 失败"))
+}
+
+/// 异步流式执行命令，stdout/stderr 逐行打印到 eprintln!。
+pub async fn run_streamed(prog: &str, args: &[String]) -> anyhow::Result<()> {
+    use std::collections::VecDeque;
+    const ERR_TAIL_KEEP: usize = 64;
+
+    let mut child = build_tokio_command(prog, args)
+        .spawn()
+        .with_context(|| format!("spawn {prog} 失败"))?;
+
+    let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+    let stderr = child.stderr.take();
+
+    let mut out_reader = tokio::io::BufReader::new(stdout).lines();
+    let mut err_reader = stderr.map(|e| tokio::io::BufReader::new(e).lines());
+
+    let mut out_done = false;
+    let mut err_done = false;
+    // 只保留尾部 ERR_TAIL_KEEP 行 stderr，避免 verbose 输出无界占用内存。
+    let mut err_buf: VecDeque<String> = VecDeque::with_capacity(ERR_TAIL_KEEP);
+
+    let read_result: anyhow::Result<()> = async {
+        while !out_done || !err_done {
+            tokio::select! {
+                line = out_reader.next_line(), if !out_done => {
+                    match line {
+                        Ok(Some(line)) => {
+                            if !line.is_empty() {
+                                eprintln!("[install] {prog}: {line}");
+                            }
+                        }
+                        Ok(None) => out_done = true,
+                        Err(e) => anyhow::bail!("stdout: {e}"),
+                    }
+                }
+                line = async {
+                    match err_reader.as_mut() {
+                        Some(r) => r.next_line().await,
+                        None => std::future::pending().await,
+                    }
+                }, if !err_done => {
+                    match line {
+                        Ok(Some(line)) => {
+                            if !line.is_empty() {
+                                if err_buf.len() == ERR_TAIL_KEEP {
+                                    err_buf.pop_front();
+                                }
+                                err_buf.push_back(line.clone());
+                                eprintln!("[install] {prog}!: {line}");
+                            }
+                        }
+                        Ok(None) => err_done = true,
+                        Err(e) => anyhow::bail!("stderr: {e}"),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    let status = child.wait().await.with_context(|| format!("wait {prog}"))?;
+    if let Err(e) = read_result {
+        // 读取失败 / 子进程错误时确保子进程被杀掉，否则 npm/uv 安装进程会成孤儿继续运行。
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        return Err(e);
+    }
+    if !status.success() {
+        let tail = err_buf.iter().cloned().collect::<Vec<_>>().join("; ");
+        anyhow::bail!("{} 退出码 {:?}{}", prog, status.code(),
+            if tail.is_empty() { String::new() } else { format!(": {tail}") });
+    }
+    Ok(())
+}
+
+/// PATH 解析：`npx` → 平台对应的真实可执行路径
+///
+/// - Windows：优先找 `.exe`，再 `.cmd/.bat/.ps1`，避免闪窗
+/// - Unix：直接查 PATH，检查文件存在且可执行
 pub fn resolve_cmd(name: &str) -> PathBuf {
     let p = PathBuf::from(name);
     if p.is_absolute() || p.extension().is_some() { return p; }
-    #[cfg(windows)]
-    {
-        let suffixes = ["exe", "cmd", "bat", "ps1", ""];
-        if let Some(path_var) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path_var) {
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            #[cfg(windows)]
+            {
+                let suffixes = ["exe", "cmd", "bat", "ps1", ""];
                 for ext in &suffixes {
                     let candidate = if ext.is_empty() { dir.join(name) } else { dir.join(format!("{name}.{ext}")) };
                     if let Ok(meta) = candidate.metadata() {
@@ -36,9 +236,25 @@ pub fn resolve_cmd(name: &str) -> PathBuf {
                     }
                 }
             }
+            #[cfg(not(windows))]
+            {
+                let candidate = dir.join(name);
+                if is_executable(&candidate) {
+                    return candidate;
+                }
+            }
         }
     }
     p
+}
+
+/// Unix 可执行性检查：文件存在且至少有一个可执行位
+#[cfg(not(windows))]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
 }
 
 /// .cmd/.bat 文件解析：读内容找出真实 .exe 路径 + 脚本路径
@@ -120,9 +336,18 @@ pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
     None
 }
 
+/// Unix 上 uv tool 安装的可执行文件路径。
+/// uv 默认把工具链接到 `~/.local/bin/<package>`。
+#[cfg(not(windows))]
+pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
+    dirs::home_dir()
+        .map(|h| h.join(".local").join("bin").join(package))
+        .filter(|p| is_executable(p))
+}
+
 /// 把命令 + 参数转成可直接 spawn 的形式
-/// - uvx <pkg> → 绕过 uvx，用缓存的 .exe
-/// - npx <pkg> → 直接找 npm 缓存里的 node.exe + npx-cli.js
+/// - Windows：uvx <pkg> → 绕过 uvx，用缓存的 .exe；npx <pkg> → 直接找 npm 缓存里的 node.exe + npx-cli.js
+/// - Unix：uvx / npx 等 shebang 脚本或原生二进制直接 spawn
 /// - .exe      → 原样
 pub fn resolve_spawn_command(cmd: &PathBuf, args: &[String]) -> (PathBuf, Vec<String>) {
     // uvx 绕过
@@ -135,12 +360,20 @@ pub fn resolve_spawn_command(cmd: &PathBuf, args: &[String]) -> (PathBuf, Vec<St
             }
         }
     }
-    // npx / npm .cmd 文件解析
-    if cmd.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).map_or(false, |e| e == "cmd" || e == "bat") {
-        if let Some((exe, mut exe_args)) = parse_cmd_file(cmd) {
-            exe_args.extend(args.iter().cloned());
-            return (exe, exe_args);
+
+    #[cfg(windows)]
+    {
+        // npx / npm .cmd 文件解析
+        if cmd.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).map_or(false, |e| e == "cmd" || e == "bat") {
+            if let Some((exe, mut exe_args)) = parse_cmd_file(cmd) {
+                exe_args.extend(args.iter().cloned());
+                return (exe, exe_args);
+            }
         }
     }
+
+    // Unix：如果 cmd 是 shebang 脚本（如 npx），std::process::Command 会按 shebang 执行。
+    // 上面 uvx 未命中缓存时，也直接返回原 cmd，由系统调用 uvx 本体。
+
     (cmd.clone(), args.to_vec())
 }
