@@ -1,16 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, Download, Check, Loader2 } from "lucide-react";
+import { Download, Check } from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";
+import { toast } from "sonner";
 import { fetchMarket, installMarketItem, listServers, listSkills } from "@/lib/ipc";
 import type { MarketItem } from "@/lib/ipc";
+import { describeError } from "@/lib/errors";
 
 export function Market() {
   const { t } = useTranslation();
   const [items, setItems] = useState<MarketItem[]>([]);
   const [tab, setTab] = useState<"server" | "skill">("server");
   const [installedIds, setInstalledIds] = useState<Set<string>>(new Set());
-  const [refreshing, setRefreshing] = useState(false);
+
+  const inFlight = useRef(false);
 
   const refreshInstalled = async () => {
     const [svrs, sks] = await Promise.all([listServers(), listSkills()]);
@@ -21,28 +24,28 @@ export function Market() {
   };
 
   const load = async () => {
-    const r = await fetchMarket(tab);
-    setItems(r);
-    await refreshInstalled();
-  };
-  useEffect(() => { void load(); }, [tab]);
-
-  const forceRefresh = async () => {
-    setRefreshing(true);
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      const r = await fetchMarket(tab, true);
+      const r = await fetchMarket(tab);
       setItems(r);
       await refreshInstalled();
     } catch (e) {
-      console.error("refresh failed:", e);
+      toast.error(t("market.load_failed", { msg: describeError(e) }) as string);
     } finally {
-      setRefreshing(false);
+      inFlight.current = false;
     }
   };
+  useEffect(() => { void load(); }, [tab]);
 
   const install = async (it: MarketItem) => {
-    await installMarketItem(it.id, it.kind, it.source_url);
-    await refreshInstalled();
+    try {
+      await installMarketItem(it.id, it.kind, it.source_url);
+      await refreshInstalled();
+      toast.success(t("market.install_success") as string);
+    } catch (e) {
+      toast.error(t("market.install_failed", { msg: describeError(e) }) as string);
+    }
   };
 
   return (

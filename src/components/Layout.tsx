@@ -31,7 +31,7 @@ export function Layout() {
             <div className="text-[11px] text-fg-muted leading-tight">{t("app.tagline")}</div>
           </div>
         </div>
-        <nav className="flex-1 space-y-0.5 p-2">
+        <nav className="flex-1 space-y-0.5 p-2" aria-label="Main navigation">
           {items.map(({ to, key, icon: Icon, end }) => (
             <NavLink
               key={to}

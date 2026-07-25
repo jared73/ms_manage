@@ -62,10 +62,12 @@ pub async fn run_http_with_ready(
         .clone()
         .unwrap_or_default();
     eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?}");
-    // token 只打印前 8 位供用户核对，完整 token 不会出现在日志中
-    // 用 chars 而非字节切片，避免非 ASCII token 在 char boundary 处 panic
-    let token_preview: String = initial_token.chars().take(8).collect();
-    eprintln!("[ms-manage] token preview (Authorization: Bearer ...): {token_preview}...");
+    // token 前 8 位只用于开发/调试期核对 —— release build 完全禁止打印
+    #[cfg(debug_assertions)]
+    {
+        let token_preview: String = initial_token.chars().take(8).collect();
+        eprintln!("[ms-manage] token preview (Authorization: Bearer ...): {token_preview}...");
+    }
     log("info", "proxy", format!("HTTP MCP proxy listening on 127.0.0.1:{port}"), None);
 
     loop {

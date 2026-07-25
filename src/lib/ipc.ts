@@ -19,7 +19,6 @@ export interface McpServer {
   // sse / http
   url?: string;
   headers?: Record<string, string>;
-  bearer_token?: string;
   enabled: boolean;
   auto_start?: boolean;
   tags?: string[];
@@ -116,7 +115,12 @@ export interface AppSettings {
   auto_start_proxy?: boolean;
   npm_registry?: string;
   auto_inject_npm_registry?: boolean;
+  /** 永远只是掩码版(如 `mcpr_***1234`)。要看真实 token,调 `revealToken()`。 */
   mcp_token?: string;
+  /** true 表示已生成 token(此时 mcp_token 字段是有值的掩码);false 表示还没生成。 */
+  mcp_token_present?: boolean;
+  /** github_token 也是掩码版。 */
+  github_token?: string;
 }
 
 // ---- MCP Server ----
@@ -125,8 +129,10 @@ export const getServerState = (id: string) => invoke<ServerState>("get_server_st
 export const listServerStates = () => invoke<ServerState[]>("list_server_states");
 export const upsertServer = (server: McpServer) => invoke<McpServer>("upsert_server", { server });
 export const deleteServer = (id: string) => invoke<void>("delete_server", { id });
-export const startServer = (id: string) => invoke<void>("start_server", { id });
-export const stopServer = (id: string) => invoke<void>("stop_server", { id });
+export const startServer = (id: string, setAutoStart?: boolean) =>
+  invoke<void>("start_server", { id, setAutoStart: setAutoStart ?? null });
+export const stopServer = (id: string, setAutoStart?: boolean) =>
+  invoke<void>("stop_server", { id, setAutoStart: setAutoStart ?? null });
 export const testServer = (id: string) => invoke<{ ok: boolean; latency_ms?: number; tools?: unknown[]; error?: string }>("test_server", { id });
 export const fetchServerTools = (id: string) => invoke<{ name: string; description?: string; inputSchema?: unknown }[]>("fetch_server_tools", { id });
 export const setToolEnabled = (id: string, toolName: string, enabled: boolean) => invoke<void>("set_tool_enabled", { id, toolName, enabled });
@@ -199,9 +205,12 @@ export const startProxy = () => invoke<ProxyStatus>("start_proxy");
 export const stopProxy = () => invoke<void>("stop_proxy");
 
 // ---- Market ----
-export const fetchMarket = (kind?: "server" | "skill", force_refresh?: boolean) =>
-  invoke<MarketItem[]>("fetch_market", { kind, force_refresh: force_refresh ?? false });
-export const installMarketItem = (id: string, kind: string, source_url?: string) => invoke<void>("install_market_item", { id, kind, source_url });
+// Tauri 2 默认 camelCase: Rust 端 `force_refresh` / `source_url` 期望 JS 端发送 `forceRefresh` / `sourceUrl`。
+// 之前用 `force_refresh` / `source_url` 在 v2 下被静默忽略 —— 参数取到默认值或 None,功能失效但无报错。
+export const fetchMarket = (kind?: "server" | "skill", forceRefresh?: boolean) =>
+  invoke<MarketItem[]>("fetch_market", { kind, forceRefresh: forceRefresh ?? false });
+export const installMarketItem = (id: string, kind: string, sourceUrl?: string) =>
+  invoke<void>("install_market_item", { id, kind, sourceUrl });
 
 // ---- Logs ----
 export const listLogs = (opts?: { limit?: number; level?: string; source?: string }) =>
@@ -211,7 +220,8 @@ export const clearLogs = () => invoke<void>("clear_logs");
 // ---- Settings ----
 export const getSettings = () => invoke<AppSettings>("get_settings");
 export const updateSettings = (settings: AppSettings) => invoke<void>("update_settings", { settings });
-export const regenerateToken = () => invoke<string>("regenerate_token");
+export const regenerateToken = () => invoke<{ token: string }>("regenerate_token");
+export const revealToken = () => invoke<string>("reveal_token");
 export const rewriteClientConfigs = (useNpx: boolean = true) => invoke<string[]>("rewrite_client_configs", { useNpx });
 export const enableAutostart = () => invoke<void>("enable_autostart");
 export const disableAutostart = () => invoke<void>("disable_autostart");

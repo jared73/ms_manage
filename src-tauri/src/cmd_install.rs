@@ -82,6 +82,7 @@ pub async fn uninstall_server(
             f.installed_path = None;
             f.installed_at = None;
             f.install_error = None;
+            true
         });
         emit_progress(&app, &id, "done", "无需卸载（直接二进制）".to_string());
         return Ok(());
@@ -102,12 +103,14 @@ pub async fn uninstall_server(
                 f.installed_path = None;
                 f.installed_at = None;
                 f.install_error = None;
+                true
             });
             emit_progress(&app, &id, "done", format!("已卸载 {}", pkg));
         }
         Err(e) => {
             update_install_state(&state, &id, |f| {
                 f.install_error = Some(format!("卸载失败：{}", e));
+                true
             });
             emit_progress(&app, &id, "error", format!("卸载失败：{}", e));
         }
@@ -185,6 +188,7 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
             f.installed_path = s.command.clone();
             f.installed_at = Some(now_iso());
             f.install_error = None;
+            true
         }).await;
         emit_progress(app, &id, "done", format!("{} 不需要预安装（直接二进制）", name));
         return;
@@ -198,6 +202,7 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
             f.installed_path = None;
             f.installed_at = None;
             f.install_error = Some(format!("非法包名：{}", pkg));
+            true
         }).await;
         emit_progress(app, &id, "error", format!("非法包名：{}", pkg));
         return;
@@ -216,6 +221,7 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
             f.installed_path = Some(path);
             f.installed_at = Some(now_iso());
             f.install_error = None;
+            true
         }).await;
         emit_progress(app, &id, "done", format!("{} 已安装 (v{})，跳过安装", name, version));
         return;
@@ -234,6 +240,7 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
             f.installed_path = None;
             f.installed_at = None;
             f.install_error = Some(format!("安装失败：{}", e));
+            true
         }).await;
         emit_progress(app, &id, "error", format!("安装失败：{}", e));
         return;
@@ -252,7 +259,9 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
                 f.installed_path = Some(path);
                 f.installed_at = Some(now_iso());
                 f.install_error = None;
-            }).await;
+            
+                true
+    }).await;
             emit_progress(app, &id, "done", format!("{} 安装成功 (v{})", name, version));
         }
         Ok(None) => {
@@ -262,7 +271,9 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
                 f.installed_path = None;
                 f.installed_at = None;
                 f.install_error = Some("安装命令成功退出，但探测不到已安装的二进制".to_string());
-            }).await;
+            
+                true
+    }).await;
             emit_progress(app, &id, "error", "安装命令成功退出，但探测不到二进制".to_string());
         }
         Err(e) => {
@@ -272,7 +283,9 @@ async fn run_install(app: &AppHandle, s: StoredServer) {
                 f.installed_path = None;
                 f.installed_at = None;
                 f.install_error = Some(format!("解析失败：{}", e));
-            }).await;
+            
+                true
+    }).await;
             emit_progress(app, &id, "error", format!("解析失败：{}", e));
         }
     }
@@ -341,16 +354,17 @@ fn emit_progress(app: &AppHandle, id: &str, stage: &str, message: String) {
 /// 在 AppState 上原子地修改一条 server 记录。
 /// 走 `Storage::mutate_server` —— 读-改-写全程持写锁，
 /// 跨后台任务与 GUI 并发安全（不会互相覆盖）。
-fn mutate_server<F: FnOnce(&mut StoredServer)>(
+/// 闭包返回 bool 表示是否真的改了 —— updated_at / 写盘只在 true 时发生。
+fn mutate_server<F: FnOnce(&mut StoredServer) -> bool>(
     state: &AppState,
     id: &str,
     f: F,
-) -> anyhow::Result<()> {
-    state.storage.mutate_server(id, f)?;
-    Ok(())
+) -> anyhow::Result<bool> {
+    let (_, changed) = state.storage.mutate_server(id, f)?;
+    Ok(changed)
 }
 
-fn update_install_state<F: FnOnce(&mut StoredServer)>(
+fn update_install_state<F: FnOnce(&mut StoredServer) -> bool>(
     state: &State<'_, Arc<AppState>>,
     id: &str,
     f: F,
@@ -358,7 +372,7 @@ fn update_install_state<F: FnOnce(&mut StoredServer)>(
     let _ = mutate_server(state.inner(), id, f);
 }
 
-async fn update_install_state_from<F: FnOnce(&mut StoredServer)>(
+async fn update_install_state_from<F: FnOnce(&mut StoredServer) -> bool>(
     _app: &AppHandle,
     s: &StoredServer,
     f: F,
@@ -375,6 +389,7 @@ fn write_back(state: &State<'_, Arc<AppState>>, id: &str, updated: &StoredServer
         let keep_updated_at = slot.updated_at.clone();
         *slot = updated.clone();
         slot.updated_at = keep_updated_at;
+        true
     });
 }
 

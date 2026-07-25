@@ -21,14 +21,15 @@ pub fn list_logs(
         .map(|s| s.to_string());
 
     let logs = state.storage.logs.read();
-    let mut filtered: Vec<_> = logs.iter()
+    // 倒序遍历（最新在前），跳过不匹配的，只取 limit 条 —— 避免 clone 全量日志再 truncate。
+    let filtered: Vec<_> = logs.iter()
+        .rev()
         .filter(|l| level_filter.as_ref().map(|lv| l.level == *lv).unwrap_or(true))
         .filter(|l| source_filter.as_ref().map(|sv| l.source.starts_with(sv)).unwrap_or(true))
-        .cloned()
+        .take(limit)
+        .map(|l| serde_json::to_value(l).unwrap_or(serde_json::Value::Null))
         .collect();
-    filtered.reverse(); // 最新的在前
-    filtered.truncate(limit);
-    Ok(filtered.iter().map(|l| serde_json::to_value(l).unwrap_or(serde_json::Value::Null)).collect())
+    Ok(filtered)
 }
 
 #[tauri::command]

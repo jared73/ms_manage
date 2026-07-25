@@ -13,14 +13,14 @@ use tokio::process::Command as TokioCommand;
 
 /// 创建进程时用的无窗口标志
 #[cfg(windows)]
-pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(windows)]
-pub fn apply_no_window(cmd: &mut TokioCommand) {
+pub(crate) fn apply_no_window(cmd: &mut TokioCommand) {
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 #[cfg(not(windows))]
-pub fn apply_no_window(_cmd: &mut TokioCommand) {}
+pub(crate) fn apply_no_window(_cmd: &mut TokioCommand) {}
 
 /// 判断是否需要走 `cmd.exe /c` 包装（tokio/std 通用）。
 #[cfg(windows)]
@@ -33,7 +33,7 @@ fn needs_cmd_wrapper(path: &std::path::Path) -> bool {
 
 /// 构建一个 tokio::process::Command。
 /// 自动完成 PATH 解析、Windows cmd.exe /c 包装、CREATE_NO_WINDOW、stdin/stdout/stderr pipe。
-pub fn build_tokio_command(prog: &str, args: &[String]) -> TokioCommand {
+pub(crate) fn build_tokio_command(prog: &str, args: &[String]) -> TokioCommand {
     let resolved = resolve_cmd(prog);
     #[cfg(windows)]
     let mut c = if needs_cmd_wrapper(&resolved) {
@@ -59,13 +59,14 @@ pub fn build_tokio_command(prog: &str, args: &[String]) -> TokioCommand {
     {
         apply_no_window(&mut c);
     }
-    // npm/uv 类命令注入国内镜像（安装/探测/运行统一走这里）
-    inject_registry_env(&mut c, prog);
+    // npm/uv 类命令注入国内镜像(安装/探测/运行统一走这里)。
+    // build_tokio_command 没有用户显式 env,所以传空 map —— 用户 build 自己的 command 时另算。
+    inject_registry_env(&mut c, prog, &std::collections::HashMap::new());
     c
 }
 
 /// 异步执行命令并返回 stdout。
-pub async fn run_capture(prog: &str, args: &[&str]) -> anyhow::Result<Vec<u8>> {
+pub(crate) async fn run_capture(prog: &str, args: &[&str]) -> anyhow::Result<Vec<u8>> {
     let out = build_tokio_command(prog, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
         .output()
         .await
@@ -98,7 +99,10 @@ fn browser_mirror_envs() -> [(&'static str, &'static str); 4] {
 /// 读取 settings；`auto_inject_npm_registry` 开启时给 Node 包管理器注入 NPM_CONFIG_REGISTRY，
 /// 并注入 playwright/puppeteer 浏览器下载镜像；给 uv/uvx 注入 UV_INDEX_URL / PIP_INDEX_URL。
 /// 安装 / 探测 / 运行 server 都走这里，保证国内机器一致性。
-pub fn inject_registry_env(c: &mut TokioCommand, prog: &str) {
+///
+/// `user_env` 是 server 配置里用户显式设置的 env —— 注入**不覆盖**这些值
+/// (与 `proxy::mod::inject_npm_registry` 行为对齐)。
+pub(crate) fn inject_registry_env(c: &mut TokioCommand, prog: &str, user_env: &std::collections::HashMap<String, String>) {
     let Some(state) = crate::state::try_current() else { return; };
     let Ok(settings) = state.storage.load_settings() else { return; };
     let stem = std::path::Path::new(prog)
@@ -112,27 +116,36 @@ pub fn inject_registry_env(c: &mut TokioCommand, prog: &str) {
         && settings.auto_inject_npm_registry
     {
         let npm_registry = settings.npm_registry.trim();
-        if !npm_registry.is_empty() {
+        if !npm_registry.is_empty()
+            && !user_env.contains_key("NPM_CONFIG_REGISTRY")
+            && !user_env.contains_key("npm_config_registry")
+        {
             c.env("NPM_CONFIG_REGISTRY", npm_registry);
             c.env("npm_config_registry", npm_registry);
             c.env("npm_registry", npm_registry);
         }
         for (k, v) in browser_mirror_envs() {
-            c.env(k, v);
+            if !user_env.contains_key(k) {
+                c.env(k, v);
+            }
         }
     }
-    // uv 加速（Python MCP server）
+    // uv 加速（Python MCP server）—— 用户显式配置优先(以前总是覆盖,会冲掉用户的镜像)
     if matches!(stem.as_str(), "uv" | "uvx") {
         let mirror = "https://mirrors.aliyun.com/pypi/simple/";
-        c.env("UV_INDEX_URL", mirror);
-        c.env("PIP_INDEX_URL", mirror);
+        if !user_env.contains_key("UV_INDEX_URL") {
+            c.env("UV_INDEX_URL", mirror);
+        }
+        if !user_env.contains_key("PIP_INDEX_URL") {
+            c.env("PIP_INDEX_URL", mirror);
+        }
     }
 }
 
 
 /// 异步执行命令并返回完整 Output，不因非零退出码报错。
 /// 用于「非零退出码本身是合法结果」的探测场景（如 `npm ls -g <pkg>` 对未安装包返回 1）。
-pub async fn run_capture_output(prog: &str, args: &[&str]) -> anyhow::Result<std::process::Output> {
+pub(crate) async fn run_capture_output(prog: &str, args: &[&str]) -> anyhow::Result<std::process::Output> {
     build_tokio_command(prog, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
         .output()
         .await
@@ -140,7 +153,7 @@ pub async fn run_capture_output(prog: &str, args: &[&str]) -> anyhow::Result<std
 }
 
 /// 异步流式执行命令，stdout/stderr 逐行打印到 eprintln!。
-pub async fn run_streamed(prog: &str, args: &[String]) -> anyhow::Result<()> {
+pub(crate) async fn run_streamed(prog: &str, args: &[String]) -> anyhow::Result<()> {
     use std::collections::VecDeque;
     const ERR_TAIL_KEEP: usize = 64;
 
@@ -218,7 +231,7 @@ pub async fn run_streamed(prog: &str, args: &[String]) -> anyhow::Result<()> {
 ///
 /// - Windows：优先找 `.exe`，再 `.cmd/.bat/.ps1`，避免闪窗
 /// - Unix：直接查 PATH，检查文件存在且可执行
-pub fn resolve_cmd(name: &str) -> PathBuf {
+pub(crate) fn resolve_cmd(name: &str) -> PathBuf {
     let p = PathBuf::from(name);
     if p.is_absolute() || p.extension().is_some() { return p; }
 
@@ -264,7 +277,7 @@ fn is_executable(path: &std::path::Path) -> bool {
 /// 算法：从最后一行往回扫，找含 `%*` 的真正调用行（如 `"%NODE_EXE%" "%NPX_CLI_JS%" %*`），
 /// 跳过 FOR /F 块内部的 SET 行。如果找不到含 `%*` 的行，fallback 到最后一条含 .js 的非控制流行。
 #[cfg(windows)]
-pub fn parse_cmd_file(cmd_path: &PathBuf) -> Option<(PathBuf, Vec<String>)> {
+pub(crate) fn parse_cmd_file(cmd_path: &PathBuf) -> Option<(PathBuf, Vec<String>)> {
     let content = std::fs::read_to_string(cmd_path).ok()?;
     let cmd_dir = cmd_path.parent()?;
 
@@ -324,7 +337,7 @@ pub fn parse_cmd_file(cmd_path: &PathBuf) -> Option<(PathBuf, Vec<String>)> {
 
 /// uvx 缓存路径（绕过 uvx 直接 spawn 缓存的 .exe）
 #[cfg(windows)]
-pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
     let cache_root = dirs::data_local_dir()?.join("uv").join("cache").join("archive-v0");
     if !cache_root.is_dir() { return None; }
     let Ok(entries) = std::fs::read_dir(&cache_root) else { return None; };
@@ -339,7 +352,7 @@ pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
 /// Unix 上 uv tool 安装的可执行文件路径。
 /// uv 默认把工具链接到 `~/.local/bin/<package>`。
 #[cfg(not(windows))]
-pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
     dirs::home_dir()
         .map(|h| h.join(".local").join("bin").join(package))
         .filter(|p| is_executable(p))
@@ -349,7 +362,7 @@ pub fn resolve_uvx_cached_exe(package: &str) -> Option<PathBuf> {
 /// - Windows：uvx <pkg> → 绕过 uvx，用缓存的 .exe；npx <pkg> → 直接找 npm 缓存里的 node.exe + npx-cli.js
 /// - Unix：uvx / npx 等 shebang 脚本或原生二进制直接 spawn
 /// - .exe      → 原样
-pub fn resolve_spawn_command(cmd: &PathBuf, args: &[String]) -> (PathBuf, Vec<String>) {
+pub(crate) fn resolve_spawn_command(cmd: &PathBuf, args: &[String]) -> (PathBuf, Vec<String>) {
     // uvx 绕过
     if let Some(name) = cmd.file_stem().and_then(|s| s.to_str()) {
         if name.eq_ignore_ascii_case("uvx") && !args.is_empty() {

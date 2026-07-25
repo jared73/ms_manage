@@ -17,7 +17,7 @@ pub mod cmd_settings;
 pub mod cmd_skills;
 pub mod diagnose;
 pub mod install;
-pub mod process_util;
+pub(crate) mod process_util;
 pub mod proxy;
 pub mod proxy_endpoint;
 pub mod single_instance;
@@ -49,10 +49,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .manage(state.clone())
         .setup(move |app| {
@@ -166,6 +164,7 @@ pub fn run() {
             cmd_settings::get_settings,
             cmd_settings::update_settings,
             cmd_settings::regenerate_token,
+            cmd_settings::reveal_token,
             cmd_settings::rewrite_client_configs,
             cmd_settings::is_autostart_enabled,
             cmd_settings::enable_autostart,

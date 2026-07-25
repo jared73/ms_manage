@@ -22,7 +22,14 @@ pub fn open_data_dir(app: AppHandle, state: tauri::State<'_, Arc<AppState>>) -> 
 
 #[tauri::command]
 pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    // 仅放行 http/https —— 防御 webview 注入 `file://` / `cmd://` 等本地程序协议
+    // 让用户受害者点开就 spawn 任意进程。
+    let trimmed = url.trim();
+    let lower = trimmed.to_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!("仅允许 http(s) scheme, 收到:{trimmed}"));
+    }
     app.opener()
-        .open_url(url, None::<&str>)
+        .open_url(trimmed, None::<&str>)
         .map_err(|e| e.to_string())
 }

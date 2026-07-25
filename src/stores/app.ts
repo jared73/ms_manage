@@ -1,18 +1,19 @@
+/**
+ * 全局 UI store:目前只剩 settings 同步入口。
+ * lang / theme 不再缓存为独立字段 —— 单一真相来自后端 settings,
+ * 启动前(后端 settings 还没拉回来)的短暂 fallback 走 localStorage。
+ */
 import { create } from "zustand";
 import type { AppSettings } from "@/lib/ipc";
 
 export type ThemeName = "purple" | "midnight" | "forest" | "light";
 
 interface AppState {
-  ready: boolean;
-  lang: "zh" | "en";
-  theme: ThemeName;
-  setReady: (v: boolean) => void;
-  setLang: (l: "zh" | "en") => void;
-  setTheme: (t: ThemeName) => void;
   settings?: AppSettings;
   setSettings: (s: AppSettings) => void;
 }
+
+const DEFAULT_THEME: ThemeName = "purple";
 
 function applyTheme(t: ThemeName) {
   if (typeof document !== "undefined") {
@@ -20,25 +21,29 @@ function applyTheme(t: ThemeName) {
   }
 }
 
+/** 启动期间(后端 settings 还没回来)从 localStorage 读一份上次的偏好。 */
+export function readPersistedUi(): { theme: ThemeName } {
+  if (typeof localStorage === "undefined") return { theme: DEFAULT_THEME };
+  return {
+    theme: (localStorage.getItem("theme") as ThemeName) ?? DEFAULT_THEME,
+  };
+}
+
 export const useApp = create<AppState>((set) => ({
-  ready: false,
-  lang: (localStorage.getItem("lang") as "zh" | "en") ?? "zh",
-  theme: (localStorage.getItem("theme") as ThemeName) ?? "purple",
-  setReady: (v) => set({ ready: v }),
-  setLang: (l) => {
-    localStorage.setItem("lang", l);
-    set({ lang: l });
-  },
-  setTheme: (t) => {
-    localStorage.setItem("theme", t);
-    applyTheme(t);
-    set({ theme: t });
-  },
+  settings: undefined,
   setSettings: (s) => {
-    // 启动时从后端 settings 同步主题到 DOM
-    const t = (s.theme as ThemeName) ?? "purple";
+    const t = (s.theme as ThemeName) ?? DEFAULT_THEME;
     applyTheme(t);
-    localStorage.setItem("theme", t);
-    set({ settings: s, theme: t });
+    if (typeof localStorage !== "undefined") localStorage.setItem("theme", t);
+    set({ settings: s });
   },
 }));
+
+/**
+ * 给 Settings 页用:用户改了偏好但还没 update_settings 之前,立刻反映到 DOM。
+ * 这是过渡态 —— 后端落盘后再由 setSettings 二次同步兜底。
+ */
+export function previewTheme(t: ThemeName) {
+  applyTheme(t);
+  if (typeof localStorage !== "undefined") localStorage.setItem("theme", t);
+}

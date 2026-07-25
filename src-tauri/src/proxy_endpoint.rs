@@ -34,23 +34,28 @@ pub async fn get_router_config(state: State<'_, Arc<AppState>>) -> Result<serde_
     let settings = state.storage.load_settings().map_err(|e| e.to_string())?;
     let host = "127.0.0.1";
     let port = settings.proxy_http_port;
-    let token = settings.mcp_token.clone().unwrap_or_default();
     let url = format!("http://{host}:{port}/mcp");
     let proxy_running = state.storage.proxy_stats.read().running;
+    // 安全:只把 token 的掩码版发到 IPC。完整 token 仍需 `reveal_token` 命令。
+    // mcpServers 块里也不再含 Authorization 头 —— 用户用 reveal_token 拿真 token
+    // 再 paste 客户端,而不是从 DOM 里抓。
+    let token_present = settings.mcp_token.is_some();
+    let token_mask = settings.mcp_token.as_deref().map(crate::cmd_settings::mask_token);
     Ok(serde_json::json!({
         "endpoint": url,
         "host": host,
         "port": port,
-        "token": token,
+        "token": token_mask,
+        "token_present": token_present,
         "running": proxy_running,
         "mcpServers": {
             "ms-manage": {
                 "type": "http",
                 "url": url,
-                "headers": { "Authorization": format!("Bearer {token}") }
+                "_comment": "Authorization: Bearer <token> header not included — get the token via reveal_token and paste into your client"
             }
         },
-        "instructions": "Copy the mcpServers object into your MCP client's config. For Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json. For Claude Code: ~/.claude/mcp_servers.json. For Cursor: ~/.cursor/mcp.json. Then restart the client. Make sure the MS Manage HTTP service is running first (click 'Start' on this page)."
+        "instructions": "Click 'Copy token' below to copy the real token, then paste the mcpServers object into your MCP client's config (Claude Desktop / Cursor / Cline / Continue / Qoder). For Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json. For Claude Code: ~/.claude/mcp_servers.json. For Cursor: ~/.cursor/mcp.json. Restart the client after editing. Make sure the MS Manage HTTP service is running first (click 'Start' on this page)."
     }))
 }
 
@@ -120,15 +125,11 @@ pub fn log_event(
 /// 注意：会按 server.disabled_tools 过滤，跟 proxy::http_tools_list 行为一致。
 #[tauri::command]
 pub async fn get_exposed_tools(state: State<'_, Arc<AppState>>) -> Result<Vec<serde_json::Value>, String> {
-    let _ = state;
     let reg = crate::proxy::registry();
     let ids = reg.list_ids().await;
 
-    // 读 servers.json 拿到每个 server 的 disabled_tools
-    let servers = crate::state::AppState::initialize()
-        .ok()
-        .and_then(|s| s.storage.load_servers().ok())
-        .unwrap_or_default();
+    // 用注入的 state 读 servers（之前误用 AppState::initialize() 创建全新实例，浪费 IO）。
+    let servers = state.storage.load_servers().unwrap_or_default();
     let disabled_map: std::collections::HashMap<String, std::collections::HashSet<String>> =
         servers.into_iter()
             .map(|s| (s.id, s.disabled_tools.into_iter().collect()))

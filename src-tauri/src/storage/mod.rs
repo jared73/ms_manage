@@ -11,6 +11,12 @@ pub mod logs;
 
 /// 把 `contents` 原子写到 `path`：先写临时文件 + fsync，再 rename 到目标。
 /// 避免写入中途崩溃/断电导致文件截断（之前直接 `std::fs::write` 容易出现 0 字节或半截文件）。
+///
+/// 设计取舍:**不**保留 .bak 历史副本。
+/// - 旧实现每次写都 .bak 一份 → 重置 token、改 settings 这类高频路径会无限堆积旧文件,
+///   而且 .bak 里也含 token 等敏感字段,是隐性泄漏。
+/// - 解析失败时仍然在 load 入口单独备份为 .corrupt(那里是定位问题真正需要的);
+///   写盘过程本身原子性已由 tmp + rename 保证,不再额外留 .bak。
 pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path.parent().context("atomic_write: path has no parent")?;
     std::fs::create_dir_all(parent).context("atomic_write: create parent")?;
@@ -24,15 +30,12 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         f.write_all(contents).context("atomic_write: write tmp")?;
         f.sync_all().ok();
     }
-    // rename 在同一文件系统上是原子的；Windows 下若目标已存在，需要先 remove。
+    // rename 在同一文件系统上是原子的。
+    // Windows 下若目标已存在,需要先 remove;这里用 ignore_errors 容错(路径被并发持有等),
+    // 之后 rename 真出错就 return,不会留下半截文件。
     #[cfg(windows)]
-    {
-        if path.exists() {
-            // 把旧的 rename 成备份再覆盖，失败时回滚。
-            let backup = path.with_extension("bak");
-            let _ = std::fs::remove_file(&backup);
-            let _ = std::fs::rename(path, &backup);
-        }
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
     }
     std::fs::rename(&tmp, path).context("atomic_write: rename")?;
     Ok(())
@@ -67,8 +70,6 @@ pub struct StoredServer {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
-    #[serde(default)]
-    pub bearer_token: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -266,6 +267,10 @@ pub struct Storage {
     /// servers.json 文件读写互斥锁。
     /// 保护所有对 servers.json 的整体读-改-写，避免后台迁移与 GUI 写回互相覆盖。
     pub servers_lock: Arc<RwLock<()>>,
+    /// settings.json 内存缓存 —— proxy 每个请求都要比对 token,
+    /// 每次都 fs::read+serde_json::from_str+可能的原子写,既慢又有并发风险。
+    /// 第一次 load 时落盘,后续命中缓存;save 时 invalidate 一次。
+    pub settings_cache: Arc<RwLock<Option<StoredSettings>>>,
 }
 
 impl Storage {
@@ -278,6 +283,7 @@ impl Storage {
             logs: Arc::new(RwLock::new(Vec::new())),
             proxy_stats: Arc::new(RwLock::new(ProxyStats::default())),
             servers_lock: Arc::new(RwLock::new(())),
+            settings_cache: Arc::new(RwLock::new(None)),
         };
         // 一次性把老的单 .md skill 迁移到目录制
         skills::migrate_legacy_flat_files(&storage.skills_dir()).ok();
@@ -307,17 +313,26 @@ impl Storage {
 
     /// 原子地 读-改-写 单条 server 记录：整个过程持有写锁，
     /// 避免 load→mutate→save 三步之间被另一个任务覆盖（丢失更新）。
-    /// 返回 false 表示找不到对应 id。
-    pub fn mutate_server<F: FnOnce(&mut StoredServer)>(&self, id: &str, f: F) -> Result<bool> {
+    /// 返回 `(found, changed)`:
+    /// - `found=false` —— 找不到对应 id
+    /// - `found=true, changed=false` —— 找到了但闭包未做修改(updated_at 不动)
+    /// - `found=true, changed=true`  —— 闭包做了修改(已写盘并 bump updated_at)
+    pub fn mutate_server<F: FnOnce(&mut StoredServer) -> bool>(
+        &self,
+        id: &str,
+        f: F,
+    ) -> Result<(bool, bool)> {
         let _guard = self.servers_lock.write();
         let mut list = servers::load(&self.servers_file())?;
         let Some(slot) = list.iter_mut().find(|s| s.id == id) else {
-            return Ok(false);
+            return Ok((false, false));
         };
-        f(slot);
-        slot.updated_at = chrono::Utc::now().to_rfc3339();
-        servers::save(&self.servers_file(), &list)?;
-        Ok(true)
+        let changed = f(slot);
+        if changed {
+            slot.updated_at = chrono::Utc::now().to_rfc3339();
+            servers::save(&self.servers_file(), &list)?;
+        }
+        Ok((true, changed))
     }
 
 
@@ -342,23 +357,34 @@ impl Storage {
         self.load_settings().ok().map(|s| s.proxy_http_port)
     }
     pub fn load_settings(&self) -> Result<StoredSettings> {
+        // 读路径:命中缓存就直接返回 —— proxy 每个请求都过一次,避免每次 fs::read。
+        {
+            let cache = self.settings_cache.read();
+            if let Some(s) = cache.as_ref() {
+                return Ok(s.clone());
+            }
+        }
+        // 慢路径:读盘 + 解析 + 必要的自愈落盘,落盘后塞进缓存。
         let p = self.settings_file();
         if !p.exists() {
             let d = StoredSettings::default();
             atomic_write_json(&p, &d)?;
+            *self.settings_cache.write() = Some(d.clone());
             return Ok(d);
         }
         let raw = std::fs::read_to_string(&p)?;
         // 解析失败：不要静默回退默认（会重新生成 mcp_token，让客户端全部失联）。
         // 备份损坏文件为 .corrupt，然后用默认值起步，mcp_token 保留为 None
-        // 让下面的补生成逻辑只在“真没有 token”时触发。
+        // 让下面的补生成逻辑只在"真没有 token"时触发。
         let mut s: StoredSettings = match serde_json::from_str(&raw) {
             Ok(v) => v,
             Err(e) => {
                 let corrupt = p.with_extension("corrupt");
                 let _ = std::fs::copy(&p, &corrupt);
-                eprintln!("[storage] settings.json 解析失败（{e}），已备份到 {}，使用默认设置重新生成",
-                    corrupt.display());
+                eprintln!(
+                    "[storage] settings.json 解析失败（{}），已备份到 {}，使用默认设置重新生成",
+                    e, corrupt.display()
+                );
                 StoredSettings { mcp_token: None, ..StoredSettings::default() }
             }
         };
@@ -377,10 +403,13 @@ impl Storage {
         if s.skill_targets.len() != before {
             let _ = atomic_write_json(&p, &s);
         }
+        *self.settings_cache.write() = Some(s.clone());
         Ok(s)
     }
     pub fn save_settings(&self, s: &StoredSettings) -> Result<()> {
         atomic_write_json(&self.settings_file(), s)?;
+        // 写盘后立刻刷缓存 —— 保持单一真相,下次 load_settings 命中刚写的副本。
+        *self.settings_cache.write() = Some(s.clone());
         Ok(())
     }
 }

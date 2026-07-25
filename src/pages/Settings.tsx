@@ -3,15 +3,18 @@ import { useTranslation } from "react-i18next";
 import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
-import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled, doctorCheck } from "@/lib/ipc";
+import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, revealToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled, doctorCheck } from "@/lib/ipc";
 import type { AppSettings, DoctorItem } from "@/lib/ipc";
-import { useApp, type ThemeName } from "@/stores/app";
+import { useApp, previewTheme, readPersistedUi, type ThemeName } from "@/stores/app";
+import { describeError } from "@/lib/errors";
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const setLang = useApp((s) => s.setLang);
-  const storeTheme = useApp((s) => s.theme);
-  const setStoreTheme = useApp((s) => s.setTheme);
+  const storeSettings = useApp((s) => s.settings);
+  const setStoreSettings = useApp((s) => s.setSettings);
+  // 后端 settings 还没回来时使用 localStorage 的 fallback(避免空白)
+  const persistedTheme = readPersistedUi().theme;
+  const activeTheme = (storeSettings?.theme as ThemeName | undefined) ?? persistedTheme;
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   const [saved, setSaved] = useState(false);
@@ -19,12 +22,19 @@ export function Settings() {
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
 
+  // "已保存" 提示 2000ms 自动收起 —— 卸载时清掉,避免 setState 在已卸载组件上
+  useEffect(() => {
+    if (!saved) return;
+    const handle = window.setTimeout(() => setSaved(false), 2000);
+    return () => window.clearTimeout(handle);
+  }, [saved]);
+
   const runDoctor = async () => {
     setDoctorRunning(true);
     try {
       setDoctor(await doctorCheck());
     } catch (e) {
-      toast.error(`体检失败: ${e}`);
+      toast.error(t("settings.doctor_failed", { msg: describeError(e) }) as string);
     } finally {
       setDoctorRunning(false);
     }
@@ -32,9 +42,13 @@ export function Settings() {
 
   useEffect(() => {
     void (async () => {
-      setSettings(await getSettings());
-      setInfo(await appInfo());
-      setAutoLaunchState(await isAutostartEnabled().catch(() => false));
+      try {
+        setSettings(await getSettings());
+        setInfo(await appInfo());
+        setAutoLaunchState(await isAutostartEnabled().catch(() => false));
+      } catch (e) {
+        toast.error(t("settings.load_failed", { msg: describeError(e) }) as string);
+      }
     })();
   }, []);
 
@@ -42,42 +56,63 @@ export function Settings() {
     try {
       if (next) { await enableAutostart(); } else { await disableAutostart(); }
       setAutoLaunchState(next);
-      toast.success(next ? "已开启开机自启" : "已关闭开机自启", { duration: 1500 });
+      toast.success(t(next ? "settings.autostart_on" : "settings.autostart_off") as string, { duration: 1500 });
     } catch (e) {
-      toast.error(`设置失败: ${e}`);
+      toast.error(t("settings.autostart_failed", { msg: describeError(e) }) as string);
     }
   };
 
   const save = async () => {
     if (!settings) return;
-    await updateSettings(settings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-    void i18n.changeLanguage(settings.language);
-    setLang(settings.language);
+    try {
+      await updateSettings(settings);
+      setStoreSettings(settings);
+      setSaved(true);
+      void i18n.changeLanguage(settings.language);
+    } catch (e) {
+      toast.error(t("settings.save_failed", { msg: describeError(e) }) as string);
+    }
   };
 
   const switchTheme = async (theme: ThemeName) => {
-    if (!settings || theme === storeTheme) return;
-    setStoreTheme(theme);
+    if (!settings || theme === activeTheme) return;
+    previewTheme(theme); // 立即反映到 DOM,等 setStoreSettings 兜底
     const updated = { ...settings, theme };
     setSettings(updated);
     try {
       await updateSettings(updated);
+      setStoreSettings(updated);
       toast.success(t("settings.theme_switched") as string, { duration: 1500 });
     } catch (e) {
-      toast.error(`Failed: ${e}`);
+      toast.error(t("settings.theme_update_failed", { msg: describeError(e) }) as string);
     }
   };
 
   const regen = async () => {
     try {
-      const newToken = await regenerateToken();
-      setSettings({ ...settings!, mcp_token: newToken });
+      const { token: newToken } = await regenerateToken();
+      // regen 返回完整 token —— 我们只在用户"复制"那一刻把它放进剪贴板,
+      // 不写回 settings store(那里只放掩码版)。下一次 get_settings 会拿到新掩码。
+      setSettings({
+        ...settings!,
+        mcp_token: newToken.slice(0, 5) + "***" + newToken.slice(-4),
+        mcp_token_present: true,
+      });
       const written = await rewriteClientConfigs(true);
-      toast.success(`Token 已重置，已更新 ${written.join("、")} 配置`);
+      toast.success(t("settings.token_reset_success", { targets: written.join(", ") }) as string);
     } catch (e) {
-      toast.error(`重置失败: ${e}`);
+      toast.error(t("settings.token_reset_failed", { msg: describeError(e) }) as string);
+    }
+  };
+
+  /** 用户点"复制 token"时,显式问后端要真实 token(不会自动出现在 DOM/store 里)。 */
+  const copyToken = async () => {
+    try {
+      const realToken = await revealToken();
+      await navigator.clipboard.writeText(realToken);
+      toast.success(t("settings.copied"), { duration: 1200 });
+    } catch (e) {
+      toast.error(t("settings.token_reveal_failed", { msg: describeError(e) }) as string);
     }
   };
 
@@ -93,7 +128,7 @@ export function Settings() {
           <h3 className="font-semibold">{t("settings.general")}</h3>
           <Row label={t("common.language")}>
             <select className="input max-w-[200px]" value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value as "zh" | "en" })}>
-              <option value="zh">中文</option>
+              <option value="zh">{t("settings.lang_zh")}</option>
               <option value="en">English</option>
             </select>
           </Row>
@@ -106,8 +141,8 @@ export function Settings() {
         {/* NPM / Registry —— 只保留"自动注入"勾选，URL 和 4 个镜像按钮都删了
             （硬编码使用淘宝镜像，URL 改了也不生效）*/}
         <div className="card space-y-3">
-          <h3 className="font-semibold">NPM / 镜像源</h3>
-          <Row label="自动注入">
+          <h3 className="font-semibold">{t("settings.npm_card_title")}</h3>
+          <Row label={t("settings.auto_inject_npm_registry")}>
             <input type="checkbox" checked={settings.auto_inject_npm_registry ?? true}
               onChange={(e) => {
                 const updated = { ...settings, auto_inject_npm_registry: e.target.checked };
@@ -115,7 +150,7 @@ export function Settings() {
                 void updateSettings(updated); // 自动保存，不用点"保存"按钮
               }} />
             <span className="ml-2 text-xs text-fg-muted">
-              启动 stdio 子 server 时自动注入 <code className="text-fg">NPM_CONFIG_REGISTRY=淘宝镜像</code>
+              {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"npm.taobao.org"}</code>
             </span>
           </Row>
         </div>
@@ -133,7 +168,7 @@ export function Settings() {
               { id: "midnight", label: t("settings.theme_midnight"), swatch: "#38bdf8", bg: "#0a1628" },
               { id: "forest",   label: t("settings.theme_forest"),   swatch: "#34d399", bg: "#0f1f15" },
             ] as const).map(({ id, label, swatch, bg }) => {
-              const active = storeTheme === id;
+              const active = activeTheme === id;
               return (
                 <button
                   key={id}
@@ -163,16 +198,18 @@ export function Settings() {
             <div className="flex items-center gap-3">
               <Power size={16} className="text-accent" />
               <div>
-                <div className="text-sm font-medium">开机自启</div>
+                <div className="text-sm font-medium">{t("settings.auto_launch")}</div>
                 <div className="text-xs text-fg-muted">
-                  系统启动时自动打开 MS Manage（窗口最小化到托盘）
+                  {t("settings.autostart_card_desc")}
                 </div>
               </div>
             </div>
             <button
               onClick={() => handleAutoLaunch(!autoLaunch)}
+              role="switch"
+              aria-checked={autoLaunch}
               className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
-              title={autoLaunch ? "已启用，点此关闭" : "已关闭，点此启用"}
+              title={t(autoLaunch ? "common.enabled" : "common.disabled")}
             >
               <span
                 className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg-subtle shadow-sm transition-all ${autoLaunch ? "left-5" : "left-0.5"}`}
@@ -185,12 +222,12 @@ export function Settings() {
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-semibold">环境体检</h3>
-              <div className="text-xs text-fg-muted">检查当前机器是否具备运行 MCP server、接入客户端的条件</div>
+              <h3 className="font-semibold">{t("settings.doctor")}</h3>
+              <div className="text-xs text-fg-muted">{t("settings.doctor_desc")}</div>
             </div>
             <button className="btn-primary inline-flex items-center gap-1.5" onClick={runDoctor} disabled={doctorRunning}>
               {doctorRunning ? <Loader2 size={14} className="animate-spin"/> : <Stethoscope size={14}/>}
-              {doctorRunning ? "检查中…" : doctor ? "重新检查" : "一键体检"}
+              {doctorRunning ? t("settings.doctor_running") : doctor ? t("settings.doctor_rerun") : t("settings.doctor_run")}
             </button>
           </div>
           {doctor && (
@@ -213,8 +250,8 @@ export function Settings() {
                           <span className="flex-1 break-all">{it.suggestion}</span>
                           <button
                             className="btn-ghost shrink-0 p-0.5"
-                            title="复制建议"
-                            onClick={() => { navigator.clipboard.writeText(it.suggestion!); toast.success("已复制", { duration: 1200 }); }}
+                            title={t("settings.copy_suggestion") as string}
+                            onClick={() => { navigator.clipboard.writeText(it.suggestion!).catch(() => {}); toast.success(t("settings.copied") as string, { duration: 1200 }); }}
                           >
                             <Copy size={11}/>
                           </button>
@@ -240,14 +277,16 @@ export function Settings() {
           </Row>
           <Row label="MCPR_TOKEN">
             <div className="flex items-center gap-2">
-              <code className="text-xs text-fg-muted break-all">{settings.mcp_token ?? "(未生成)"}</code>
-              {settings.mcp_token && (
-                <button className="btn-ghost text-xs" onClick={() => navigator.clipboard.writeText(settings.mcp_token!)}>复制</button>
+              <code className="text-xs text-fg-muted break-all">
+                {settings.mcp_token_present ? settings.mcp_token : t("settings.token_not_generated")}
+              </code>
+              {settings.mcp_token_present && (
+                <button className="btn-ghost text-xs" onClick={copyToken}>{t("common.copy")}</button>
               )}
               <button
                 className="btn-ghost p-1.5"
                 onClick={regen}
-                title="重置 token（所有客户端需更新配置）"
+                title={t("settings.token_regen_tooltip") as string}
               >
                 <RefreshCw size={14}/>
               </button>

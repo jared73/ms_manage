@@ -1,14 +1,14 @@
 //! 跨平台 symlink / junction 工具
 //!
-//! Windows 上优先用 `mklink /J`（junction），无需 SeCreateSymbolicLinkPrivilege，
-//! 普通用户即可创建。Unix 上用 `std::os::unix::fs::symlink`。
+//! Windows 上直接调 Win32 `CreateSymbolicLinkW`（directory 标志位 = junction 语义），
+//! 避免再走 `cmd.exe /C mklink` 时的 shell 解析（即便参数是 Rust 控制的，过一道 cmd 也增加被
+//! log/审计链锁定的负担，且 `CREATE_NO_WINDOW` 不是根治方案）。
+//! Unix 上用 `std::os::unix::fs::symlink`。
 //!
-//! 注：junction 只能指向**绝对路径**，调用方需把 target 转为绝对路径。
+//! 注：junction / symlink 只能指向**绝对路径**，调用方需把 target 转为绝对路径。
 
 use std::path::Path;
 use thiserror::Error;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Error)]
 pub enum SymlinkError {
@@ -28,16 +28,29 @@ pub fn create_dir_link(link: &Path, target: &Path) -> Result<(), SymlinkError> {
 
     #[cfg(windows)]
     {
-        let link_s = link.to_string_lossy().to_string();
-        let target_s = target.to_string_lossy().to_string();
-        let out = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J", &link_s, &target_s])
-            .creation_flags(0x0800_0000)  // CREATE_NO_WINDOW — 防止 mklink 弹黑窗
-            .output()?;
-        if !out.status.success() {
-            return Err(SymlinkError::Cmd(
-                String::from_utf8_lossy(&out.stderr).to_string(),
-            ));
+        // Win32 CreateSymbolicLinkW —— SYMBOLIC_LINK_FLAG_DIRECTORY = 1,等价于 `mklink /J`
+        // 不再 spawn cmd.exe,避免把 link / target 路径塞进 shell 解析。
+        use std::os::windows::ffi::OsStrExt;
+        const SYMBOLIC_LINK_FLAG_DIRECTORY: u32 = 0x0001;
+        const SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE: u32 = 0x0002; // Win10 1703+,免 SeCreateSymbolicLinkPrivilege
+
+        let link_w: Vec<u16> = link.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let target_w: Vec<u16> = target.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let flags = SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::CreateSymbolicLinkW(
+                link_w.as_ptr(),
+                target_w.as_ptr(),
+                flags,
+            )
+        };
+        if ok == 0 {
+            let err = std::io::Error::last_os_error();
+            // ERROR_ALREADY_EXISTS (183):reconcile 同步竞争产生,作为 AlreadyExists 返回便于上游决策
+            if err.raw_os_error() == Some(183) {
+                return Err(SymlinkError::AlreadyExists(link.display().to_string()));
+            }
+            return Err(SymlinkError::Io(err));
         }
         Ok(())
     }

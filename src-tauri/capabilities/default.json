@@ -17,10 +17,8 @@
     "dialog:default",
     "fs:default",
     "http:default",
-    "shell:default",
     "store:default",
     "os:default",
-    "process:default",
     "opener:default"
   ]
 }

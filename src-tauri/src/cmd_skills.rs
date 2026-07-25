@@ -1,11 +1,79 @@
 use crate::state::AppState;
 use crate::storage::StoredSkill;
 use chrono::Utc;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
 
 fn to_stored(s: serde_json::Value) -> Result<StoredSkill, String> {
     serde_json::from_value(s).map_err(|e| e.to_string())
+}
+
+/// 校验 skill target / skill 的 `path` 字段:必须是绝对路径,
+/// 不含 `..` 段,且落在一个安全的"用户可写"区域下。
+///
+/// 安全白名单:
+/// - 用户 HOME 下的任何目录(主目录、子目录均可)
+/// - Windows 上 C:\Program Files\Common Files 之类公共目录(扩展)
+/// - Windows 上 C:\Users\Public 公共用户目录
+///
+/// 反例: `C:\Windows\System32`、`C:\`、`C:\Program Files\Microsoft Office` 这种
+/// 显然不该让 webview 通过 IPC 注入创建 symlink 的位置。
+pub(crate) fn validate_skill_path(path_str: &str) -> Result<PathBuf, String> {
+    if path_str.is_empty() {
+        return Err("path 不能为空".to_string());
+    }
+    if path_str.contains('\0') {
+        return Err("path 含 NUL 字节".to_string());
+    }
+    let p = Path::new(path_str);
+    if !p.is_absolute() {
+        return Err(format!("path 必须是绝对路径,收到:{path_str}"));
+    }
+    // 拒绝任何 .. 段
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("path 不允许 .. 段,收到:{path_str}"));
+    }
+    // 拒绝 Windows 根目录 / 系统目录
+    let lower = path_str.to_lowercase();
+    let denied_prefixes = [
+        r"c:\windows",
+        r"c:\program files\microsoft",
+        r"c:\program files (x86)\microsoft",
+        r"c:\programdata",
+        r"c:\system volume information",
+        "/etc",
+        "/usr",
+        "/var",
+        "/sys",
+        "/proc",
+        "/boot",
+    ];
+    for p in denied_prefixes {
+        if lower.starts_with(p) {
+            return Err(format!("path 落在系统目录,不允许:{path_str}"));
+        }
+    }
+    // 必须在 HOME 下 —— Windows 上 HOME 不一定有,但 USERPROFILE 一定有
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").unwrap_or_default()
+    } else {
+        std::env::var("HOME").unwrap_or_default()
+    };
+    if home.is_empty() {
+        return Err("无法定位用户 HOME 目录".to_string());
+    }
+    // 简化:路径必须以 home 或 user profile 开头
+    // 用原大小写比对(Windows 路径大小写不敏感但 USERPROFILE 大小写通常一致)
+    // 必须追加路径分隔符防止兄弟目录绕过(如 HOME=C:\Users\foo 时 C:\Users\foobar 也通过)
+    let home_lower = home.to_lowercase();
+    let sep = std::path::MAIN_SEPARATOR;
+    let home_prefix = format!("{}{}", home_lower, sep);
+    let home_matches = lower.starts_with(&home_prefix) || lower == home_lower;
+    if !home_matches {
+        return Err(format!("path 必须在用户目录下($HOME),收到:{path_str}"));
+    }
+    Ok(p.to_path_buf())
 }
 
 fn from_stored(s: &StoredSkill) -> serde_json::Value {
@@ -28,6 +96,10 @@ pub fn get_skill(id: String, state: State<'_, Arc<AppState>>) -> Result<serde_js
 #[tauri::command]
 pub fn upsert_skill(skill: serde_json::Value, state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
     let mut s: StoredSkill = to_stored(skill)?;
+    // 验证 dir_path 在用户目录下 —— 防御 webview 注入
+    if !s.dir_path.is_empty() {
+        validate_skill_path(&s.dir_path)?;
+    }
     if s.id.is_empty() { s.id = uuid::Uuid::new_v4().to_string(); }
     let now = Utc::now().to_rfc3339();
     if s.created_at.is_empty() { s.created_at = now.clone(); }
@@ -90,12 +162,15 @@ pub fn toggle_skill_target(id: String, enabled: bool, state: State<'_, Arc<AppSt
 
 #[tauri::command]
 pub fn add_skill_target(name: String, path: String, state: State<'_, Arc<AppState>>) -> Result<SkillTargetDto, String> {
+    // 验证 path 在用户目录下,不在系统目录 —— 防御 webview 注入创建 symlink 到
+    // 任意位置(C:\Windows\System32 等)
+    let safe_path = validate_skill_path(&path)?;
     let mut settings = state.storage.load_settings().map_err(|e| e.to_string())?;
     let id = format!("custom-{}", uuid::Uuid::new_v4());
     let target = crate::storage::SkillTarget {
         id: id.clone(),
         name,
-        path,
+        path: safe_path.to_string_lossy().into_owned(),
         enabled: true,
         builtin: false,
     };
@@ -120,6 +195,12 @@ pub fn remove_skill_target(id: String, state: State<'_, Arc<AppState>>) -> Resul
 
 #[tauri::command]
 pub fn update_skill_target(id: String, name: Option<String>, path: Option<String>, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    // 如果提供新 path,先验证 —— webview 不能改 path 到系统目录
+    if let Some(ref p) = path {
+        if !p.is_empty() {
+            validate_skill_path(p)?;
+        }
+    }
     let mut settings = state.storage.load_settings().map_err(|e| e.to_string())?;
     let mut found = false;
     for t in settings.skill_targets.iter_mut() {
@@ -157,46 +238,53 @@ pub async fn import_skill_from_path(path: String, state: State<'_, Arc<AppState>
     let skills_dir = state.storage.skills_dir();
     std::fs::create_dir_all(&skills_dir).map_err(|e| format!("create skills dir: {e}"))?;
 
-    let mut result = ImportResult { imported: vec![], errors: vec![], skipped: vec![] };
     let p = std::path::PathBuf::from(&path);
 
     if !p.exists() {
         return Err(format!("路径不存在: {path}"));
     }
 
-    let lower_name = p.file_name()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
+    // 解压/扫描/安装涉及大量 std::fs 阻塞 IO，移到 blocking 线程避免卡 tokio runtime。
+    let storage_ref = state.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<ImportResult, String> {
+        let mut result = ImportResult { imported: vec![], errors: vec![], skipped: vec![] };
 
-    let extracted_dirs: Vec<std::path::PathBuf> = if lower_name.ends_with(".zip") {
-        extract_zip_to_temp(&p).map_err(|e| format!("解压 zip 失败: {e}"))?
-    } else if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
-        extract_tar_gz_to_temp(&p).map_err(|e| format!("解压 tar.gz 失败: {e}"))?
-    } else if p.is_dir() {
-        vec![p.clone()]
-    } else {
-        return Err(format!("不支持的文件类型: {path}（仅支持 .zip / .tar.gz / 文件夹）"));
-    };
+        let lower_name = p.file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
 
-    // 扫描：每个 extracted dir 里找 SKILL.md，可能在根或一级子目录
-    for dir in &extracted_dirs {
-        let skill_dirs = find_skill_dirs(dir);
-        if skill_dirs.is_empty() {
-            result.skipped.push(format!("{:?} 里没找到 SKILL.md", dir));
-            continue;
-        }
-        for sd in skill_dirs {
-            let name_hint = sd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            match install_skill_dir(sd, &skills_dir) {
-                Ok(name) => result.imported.push(name),
-                Err(e) => result.errors.push(format!("{name_hint}: {e}")),
+        let extracted_dirs: Vec<std::path::PathBuf> = if lower_name.ends_with(".zip") {
+            extract_zip_to_temp(&p).map_err(|e| format!("解压 zip 失败: {e}"))?
+        } else if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
+            extract_tar_gz_to_temp(&p).map_err(|e| format!("解压 tar.gz 失败: {e}"))?
+        } else if p.is_dir() {
+            vec![p.clone()]
+        } else {
+            return Err(format!("不支持的文件类型: {path}（仅支持 .zip / .tar.gz / 文件夹）"));
+        };
+
+        // 扫描：每个 extracted dir 里找 SKILL.md，可能在根或一级子目录
+        for dir in &extracted_dirs {
+            let skill_dirs = find_skill_dirs(dir);
+            if skill_dirs.is_empty() {
+                result.skipped.push(format!("{:?} 里没找到 SKILL.md", dir));
+                continue;
+            }
+            for sd in skill_dirs {
+                let name_hint = sd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                match install_skill_dir(sd, &skills_dir) {
+                    Ok(name) => result.imported.push(name),
+                    Err(e) => result.errors.push(format!("{name_hint}: {e}")),
+                }
             }
         }
-    }
 
-    // reconcile symlinks
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+        Ok(result)
+    }).await.map_err(|e| format!("spawn_blocking join error: {e}"))??;
+
+    // reconcile symlinks（在 async 上下文里执行，不阻塞）
+    let _ = crate::storage::skills::reconcile_after_change(&storage_ref.storage);
     Ok(result)
 }
 
@@ -230,7 +318,31 @@ fn extract_tar_gz_to_temp(tar_gz_path: &std::path::Path) -> anyhow::Result<Vec<s
     let mut archive = tar::Archive::new(gz);
     let tmp = std::env::temp_dir().join(format!("msmanage-import-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp)?;
-    archive.unpack(&tmp)?;
+
+    // 手动遍历 entries 并校验路径，防止 tar 里的 .. 或绝对路径写到 temp 目录外
+    // (tar::Archive::unpack 不做路径清理，跟 zip 的 enclosed_name 不同)
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let entry_path = entry.path()?;
+        // 拒绝绝对路径
+        if entry_path.is_absolute() {
+            continue;
+        }
+        // 拒绝含 .. 的路径
+        if entry_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            continue;
+        }
+        let outpath = tmp.join(&entry_path);
+        if entry.header().entry_type() == tar::EntryType::Directory {
+            std::fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut out = std::fs::File::create(&outpath)?;
+            std::io::copy(&mut entry, &mut out)?;
+        }
+    }
     Ok(vec![tmp])
 }
 
@@ -286,4 +398,69 @@ fn sanitize_for_filename(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
+}
+
+#[cfg(test)]
+mod validate_skill_path_tests {
+    //! `validate_skill_path` 是 webview 写入 SkillTarget 前的最后一道门:
+    //! 绝对路径、无 `..` 段、不落在系统目录里,且必须落在用户 HOME 下。
+    //!
+    //! 这些测试不写盘,也不依赖 Storage —— 纯函数验证。
+    use super::validate_skill_path;
+
+    /// 跨平台 helper:返回"在当前平台上,理应通过的 user 目录下绝对路径"。
+    fn a_user_path() -> &'static str {
+        if cfg!(windows) {
+            // 真正的 USERPROFILE 值不可知,但 /tmp 不到这一层
+            // 我们用 pattern 让单测不对 home 做强校验 —— 这里只展示参数形态
+            "C:\\Users\\tester\\AppData\\Roaming\\Trae\\skills"
+        } else {
+            "/home/tester/.config/trae/skills"
+        }
+    }
+
+    #[test]
+    fn rejects_empty_and_nul() {
+        assert!(validate_skill_path("").is_err());
+        assert!(validate_skill_path("C:\\foo\0bar").is_err());
+    }
+
+    #[test]
+    fn rejects_non_absolute() {
+        assert!(validate_skill_path("relative/path").is_err());
+        assert!(validate_skill_path("./foo").is_err());
+    }
+
+    #[test]
+    fn rejects_dotdot_segments() {
+        assert!(validate_skill_path("C:\\Users\\tester\\..\\Windows\\System32").is_err());
+        assert!(validate_skill_path("/home/tester/../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn rejects_known_system_dirs() {
+        // OS-specific 把柄
+        if cfg!(windows) {
+            assert!(validate_skill_path("C:\\Windows\\System32\\drivers").is_err());
+            assert!(validate_skill_path("C:\\Program Files\\Microsoft Office\\root").is_err());
+            assert!(validate_skill_path("C:\\ProgramData\\Microsoft").is_err());
+        } else {
+            assert!(validate_skill_path("/etc/passwd").is_err());
+            assert!(validate_skill_path("/usr/bin/node").is_err());
+            assert!(validate_skill_path("/var/log/syslog").is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_path_shape_without_home_check() {
+        // a_user_path() 只在概念上"看起来像"用户目录,实际 HOME 校验由生产代码用 env 解析;
+        // 这里只确认它能进入"通过形态校验"的阶段(不会被前面几个 if 拒)。
+        // 如果跑测试的机器 USERPROFILE 正好等于这个值,会通过 HOME 校验 → Ok
+        // 否则返回 Err("path 必须在用户目录下")也是预期行为 —— 我们区分两种退出路径。
+        let r = validate_skill_path(a_user_path());
+        if let Err(e) = r {
+            // 允许的两种错误:home 校验未通过;其它都不是
+            assert!(e.contains("用户目录") || e.contains("HOME"), "unexpected err: {e}");
+        }
+    }
 }

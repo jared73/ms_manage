@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Server, Sparkles, Activity, Wrench, ChevronDown, ChevronRight, Plug, Plus, ArrowRight } from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";
 import {
-  getProxyStatus, getToolsTotal, getExposedTools,
+  getProxyStatus, getExposedTools,
   listServerStates, listSkills, appInfo,
 } from "@/lib/ipc";
 import type { ServerState, Skill } from "@/lib/ipc";
@@ -16,7 +16,6 @@ export function Dashboard() {
   const [servers, setServers] = useState<ServerState[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [info, setInfo] = useState<{ version: string } | null>(null);
-  const [toolsTotal, setToolsTotal] = useState(0);
   const [exposedTools, setExposedTools] = useState<{ name: string; description?: string; __server: string }[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
 
@@ -25,21 +24,29 @@ export function Dashboard() {
     appInfo().then((i) => setInfo(i ? { version: i.version } : null)).catch(() => {});
   }, []);
 
-  // 动态状态：5s 轮询（原来 1.5s 且每次还附带静态项 + 文件系统扫描，太重）
+  // 动态状态：5s 轮询（原来 1.5s 且每次还附带静态项 + 文件系统扫描，太重）。
+  // 用 inFlightRef 避免上一次轮询还没回就触发下一次 —— 落后响应会覆盖最新数据。
+  const inFlightRef = useRef(false);
   useEffect(() => {
     const load = async () => {
-      const [p, ss, sk, tt, et] = await Promise.all([
-        getProxyStatus().catch(() => null),
-        listServerStates().catch(() => []),
-        listSkills().catch(() => []),
-        getToolsTotal().catch(() => 0),
-        getExposedTools().catch(() => []),
-      ]);
-      setProxy(p as any);
-      setServers(ss);
-      setSkills(sk);
-      setToolsTotal(typeof tt === "number" ? tt : 0);
-      setExposedTools(Array.isArray(et) ? et : []);
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      try {
+        const [p, ss, sk, , et] = await Promise.all([
+          getProxyStatus().catch(() => null),
+          listServerStates().catch(() => []),
+          listSkills().catch(() => []),
+          // getToolsTotal 因为 dashboard 不显示总数,跳过这只 IPC(0 extra round trip)
+          Promise.resolve(0) as Promise<number>,
+          getExposedTools().catch(() => []),
+        ]);
+        setProxy(p);
+        setServers(ss);
+        setSkills(sk);
+        setExposedTools(Array.isArray(et) ? et : []);
+      } finally {
+        inFlightRef.current = false;
+      }
     };
     void load();
     const t = setInterval(() => { void load(); }, 5000);
@@ -99,15 +106,24 @@ export function Dashboard() {
             <div className="flex items-center gap-2">
               {toolsOpen ? <ChevronDown size={14} className="text-fg-muted" /> : <ChevronRight size={14} className="text-fg-muted" />}
               <Wrench size={16} className="text-accent" />
-              <span className="text-sm font-semibold">已暴露的工具</span>
-              <span className="badge-mute text-[10px]">总数 {exposedTools.length + totalDisabled}</span>
+              <span className="text-sm font-semibold">{t("dashboard.exposed_tools")}</span>
+              <span className="badge-mute text-[10px]">
+                {t("dashboard.exposed_tools_total", { total: exposedTools.length + totalDisabled })}
+              </span>
               {totalDisabled > 0 ? (
-                <span className="badge-mute text-[10px]">{exposedTools.length} 个启用 · {totalDisabled} 已关闭</span>
+                <span className="badge-mute text-[10px]">
+                  {t("dashboard.exposed_tools_breakdown", {
+                    enabled: exposedTools.length,
+                    disabled: totalDisabled,
+                  })}
+                </span>
               ) : (
-                <span className="badge-mute text-[10px]">{exposedTools.length} 个</span>
+                <span className="badge-mute text-[10px]">
+                  {t("dashboard.exposed_tools_count", { count: exposedTools.length })}
+                </span>
               )}
             </div>
-            <span className="text-[11px] text-fg-muted">Qoder / Claude Code / Cursor 都能调用</span>
+            <span className="text-[11px] text-fg-muted">{t("dashboard.exposed_tools_hint")}</span>
           </button>
           {toolsOpen && (
             <div className="max-h-72 space-y-1 overflow-auto">
@@ -136,7 +152,7 @@ export function Dashboard() {
               <div className="flex justify-center gap-2">
                 <button className="btn-primary" onClick={() => nav("/servers")}>{t("dashboard.quick_start.add_server")}</button>
                 <button className="btn-ghost" onClick={() => nav("/skills")}>{t("dashboard.quick_start.add_skill")}</button>
-                <button className="btn-ghost" onClick={() => nav("/connections")}>客户端接入 →</button>
+                <button className="btn-ghost" onClick={() => nav("/connections")}>{t("dashboard.action_connect_title")} →</button>
               </div>
             </div>
           </EmptyHint>
@@ -144,20 +160,20 @@ export function Dashboard() {
           <div className="grid gap-3 sm:grid-cols-3">
             <ActionCard
               icon={<Plus size={18} />}
-              title={t("common.add") + " MCP"}
-              desc={t("dashboard.stats.servers_total") + `：${servers.length}`}
+              title={t("dashboard.action_add_mcp_title")}
+              desc={t("dashboard.stats.servers_total") + `: ${servers.length}`}
               onClick={() => nav("/servers")}
             />
             <ActionCard
               icon={<Sparkles size={18} />}
-              title={t("common.add") + " Skill"}
-              desc={t("dashboard.stats.skills_total") + `：${skills.length}`}
+              title={t("dashboard.action_add_skill_title")}
+              desc={t("dashboard.stats.skills_total") + `: ${skills.length}`}
               onClick={() => nav("/skills")}
             />
             <ActionCard
               icon={<Plug size={18} />}
-              title="客户端接入"
-              desc="Qoder / Claude Code / Cursor"
+              title={t("dashboard.action_connect_title")}
+              desc={t("dashboard.action_connect_desc")}
               onClick={() => nav("/connections")}
             />
           </div>

@@ -25,7 +25,6 @@
 //! - tools/call 时按 `__` 前缀解析路由
 
 pub mod connect;
-pub mod routing;
 pub mod stdio_proxy;
 
 use crate::storage::StoredServer;
@@ -370,48 +369,10 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
 
 /// 读取 settings，给 stdio child 注入 NPM_CONFIG_REGISTRY / UV_INDEX_URL 等加速环境变量。
 /// `user_env` 是 server 配置里用户显式设置的 env —— 注入**不覆盖**这些值。
+/// 单一来源:`crate::process_util::inject_registry_env`(避免两套实现漂移)。
 fn inject_npm_registry(c: &mut Command, user_env: &HashMap<String, String>) {
-    let Some(state) = crate::state::try_current() else { return; };
-    let Ok(settings) = state.storage.load_settings() else { return; };
-    let cmd_path = c.as_std().get_program();
-    let stem = std::path::Path::new(cmd_path).file_stem()
-        .and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-
-    // Node.js 包管理器加速（默认淘宝镜像）
-    if matches!(stem.as_str(), "npx" | "npm" | "pnpm" | "pnpx" | "yarn" | "bun" | "bunx" | "node") {
-        if settings.auto_inject_npm_registry {
-            let npm_registry = settings.npm_registry.trim();
-            if !npm_registry.is_empty()
-                && !user_env.contains_key("NPM_CONFIG_REGISTRY")
-                && !user_env.contains_key("npm_config_registry")
-            {
-                c.env("NPM_CONFIG_REGISTRY", npm_registry);
-                c.env("npm_config_registry", npm_registry);
-                c.env("npm_registry", npm_registry);
-            }
-            // 浏览器二进制下载镜像（playwright/puppeteer），用户显式配置优先
-            for (k, v) in [
-                ("PLAYWRIGHT_DOWNLOAD_HOST", "https://registry.npmmirror.com/-/binary/playwright"),
-                ("PLAYWRIGHT_DOWNLOAD_HOST_TEMPLATE", "https://registry.npmmirror.com/-/binary/playwright"),
-                ("PUPPETEER_DOWNLOAD_BASE_URL", "https://registry.npmmirror.com/-/binary/chrome-for-testing"),
-                ("PUPPETEER_DOWNLOAD_HOST", "https://registry.npmmirror.com/-/binary/chrome-for-testing"),
-            ] {
-                if !user_env.contains_key(k) {
-                    c.env(k, v);
-                }
-            }
-        }
-    }
-    // uv 加速（Python MCP server）：用户显式配置优先
-    if matches!(stem.as_str(), "uv" | "uvx") {
-        let mirror = "https://mirrors.aliyun.com/pypi/simple/";
-        if !user_env.contains_key("UV_INDEX_URL") {
-            c.env("UV_INDEX_URL", mirror);
-        }
-        if !user_env.contains_key("PIP_INDEX_URL") {
-            c.env("PIP_INDEX_URL", mirror);
-        }
-    }
+    let prog = c.as_std().get_program().to_string_lossy().to_string();
+    crate::process_util::inject_registry_env(c, &prog, user_env);
 }
 
 /// 关闭所有子进程

@@ -245,7 +245,7 @@ fn install_market_server(state: &AppState, id: &str) -> Result<String, String> {
         id: new_id.clone(), name: id.to_string(),
         description: None, transport: "stdio".to_string(),
         command: Some(command), args, env, cwd: None, url: None,
-        headers: std::collections::HashMap::new(), bearer_token: None,
+        headers: std::collections::HashMap::new(),
         enabled: true, auto_start: Some(false), tags, project_id: None,
         disabled_tools: Vec::new(), created_at: now.clone(), updated_at: now,
         installed: false, installed_version: None, installed_path: None,
