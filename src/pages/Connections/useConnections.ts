@@ -37,17 +37,21 @@ export function useConnections(): UseConnections {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [s, i, r, p] = await Promise.all([
-        getSettings(),
-        appInfo(),
-        getRouterConfig().catch(() => null),
-        getProxyStatus().catch(() => null),
-      ]);
-      if (cancelled) return;
-      setSettings(s);
-      setInfo(i);
-      setRouterConfig(r);
-      setProxy(p);
+      try {
+        const [s, i, r, p] = await Promise.all([
+          getSettings().catch(() => null),
+          appInfo().catch(() => null),
+          getRouterConfig().catch(() => null),
+          getProxyStatus().catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (s) setSettings(s);
+        if (i) setInfo(i);
+        setRouterConfig(r);
+        setProxy(p);
+      } catch {
+        // 所有 IPC 都失败时静默，页面会显示空状态
+      }
     })();
     return () => {
       cancelled = true;

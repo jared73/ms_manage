@@ -14,13 +14,17 @@ import { getSettings } from "@/lib/ipc";
 import { useApp } from "@/stores/app";
 
 export default function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const setSettings = useApp((s) => s.setSettings);
   useEffect(() => {
     void (async () => {
       try {
         const s = await getSettings();
         setSettings(s);
+        // 从后端 settings 同步语言偏好到 i18n（防止刷新页面回退到默认语言）
+        if (s.language && s.language !== i18n.language) {
+          void i18n.changeLanguage(s.language);
+        }
       } catch {
         // 忽略：使用默认主题
       }

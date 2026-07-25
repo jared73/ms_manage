@@ -267,6 +267,8 @@ pub struct Storage {
     /// servers.json 文件读写互斥锁。
     /// 保护所有对 servers.json 的整体读-改-写，避免后台迁移与 GUI 写回互相覆盖。
     pub servers_lock: Arc<RwLock<()>>,
+    /// projects.json 文件读写互斥锁。
+    pub projects_lock: Arc<RwLock<()>>,
     /// settings.json 内存缓存 —— proxy 每个请求都要比对 token,
     /// 每次都 fs::read+serde_json::from_str+可能的原子写,既慢又有并发风险。
     /// 第一次 load 时落盘,后续命中缓存;save 时 invalidate 一次。
@@ -283,6 +285,7 @@ impl Storage {
             logs: Arc::new(RwLock::new(Vec::new())),
             proxy_stats: Arc::new(RwLock::new(ProxyStats::default())),
             servers_lock: Arc::new(RwLock::new(())),
+            projects_lock: Arc::new(RwLock::new(())),
             settings_cache: Arc::new(RwLock::new(None)),
         };
         // 一次性把老的单 .md skill 迁移到目录制
@@ -381,6 +384,7 @@ impl Storage {
 
     /// 原子地 upsert（更新或插入）一条 project 记录。
     pub fn upsert_project(&self, project: &StoredProject) -> Result<()> {
+        let _guard = self.projects_lock.write();
         let mut list = projects::load(&self.projects_file())?;
         if let Some(slot) = list.iter_mut().find(|p| p.id == project.id) {
             *slot = project.clone();
@@ -392,6 +396,7 @@ impl Storage {
 
     /// 原子地删除一条 project 记录。
     pub fn remove_project(&self, id: &str) -> Result<()> {
+        let _guard = self.projects_lock.write();
         let mut list = projects::load(&self.projects_file())?;
         list.retain(|p| p.id != id);
         projects::save(&self.projects_file(), &list)

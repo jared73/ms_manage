@@ -130,14 +130,14 @@ pub(crate) fn inject_registry_env(c: &mut TokioCommand, prog: &str, user_env: &s
             }
         }
     }
-    // uv 加速（Python MCP server）—— 用户显式配置优先(以前总是覆盖,会冲掉用户的镜像)
+    // uv 加速（Python MCP server）—— 用户显式配置优先
+    // 仅在用户未设置 UV_INDEX_URL/PIP_INDEX_URL 时注入默认镜像
     if matches!(stem.as_str(), "uv" | "uvx") {
-        let mirror = "https://mirrors.aliyun.com/pypi/simple/";
         if !user_env.contains_key("UV_INDEX_URL") {
-            c.env("UV_INDEX_URL", mirror);
+            c.env("UV_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
         }
         if !user_env.contains_key("PIP_INDEX_URL") {
-            c.env("PIP_INDEX_URL", mirror);
+            c.env("PIP_INDEX_URL", "https://mirrors.aliyun.com/pypi/simple/");
         }
     }
 }

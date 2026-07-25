@@ -4,6 +4,37 @@
 
 use std::env;
 
+/// 生成本地 exe 直连的 mcpServers JSON
+fn local_cfg(exe: &str, token: &str) -> serde_json::Value {
+    serde_json::json!({
+        "mcpServers": {
+            "ms-manage": {
+                "command": exe,
+                "args": ["serve"],
+                "env": { "MCPR_TOKEN": token }
+            }
+        }
+    })
+}
+
+/// 生成 npx CLI 转发的 mcpServers JSON
+fn npx_cfg(host: &str, port: u16, token: &str) -> serde_json::Value {
+    let mut env = serde_json::Map::new();
+    env.insert("MS_MANAGE_URL".into(), serde_json::Value::String(format!("http://{host}:{port}/mcp")));
+    if !token.is_empty() {
+        env.insert("MS_MANAGE_TOKEN".into(), serde_json::Value::String(token.into()));
+    }
+    serde_json::json!({
+        "mcpServers": {
+            "ms-manage": {
+                "command": "npx",
+                "args": ["-y", "@ms-manage/cli@latest", "connect"],
+                "env": serde_json::Value::Object(env)
+            }
+        }
+    })
+}
+
 pub enum Command {
     Gui,
     ProxyStdio,
@@ -171,35 +202,6 @@ pub fn connect(target: Option<String>) {
     let port = settings.proxy_http_port;
     let host = "127.0.0.1";
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "ms_manage.exe".into());
-
-    fn local_cfg(exe: &str, token: &str) -> serde_json::Value {
-        serde_json::json!({
-            "mcpServers": {
-                "ms-manage": {
-                    "command": exe,
-                    "args": ["serve"],
-                    "env": { "MCPR_TOKEN": token }
-                }
-            }
-        })
-    }
-
-    fn npx_cfg(host: &str, port: u16, token: &str) -> serde_json::Value {
-        let mut env = serde_json::Map::new();
-        env.insert("MS_MANAGE_URL".into(), serde_json::Value::String(format!("http://{host}:{port}/mcp")));
-        if !token.is_empty() {
-            env.insert("MS_MANAGE_TOKEN".into(), serde_json::Value::String(token.into()));
-        }
-        serde_json::json!({
-            "mcpServers": {
-                "ms-manage": {
-                    "command": "npx",
-                    "args": ["-y", "@ms-manage/cli@latest", "connect"],
-                    "env": serde_json::Value::Object(env)
-                }
-            }
-        })
-    }
 
     let target = target.unwrap_or_else(|| "print".into());
     match target.as_str() {
@@ -387,35 +389,6 @@ pub fn write_all_client_configs(use_npx: bool) -> Vec<String> {
     let host = "127.0.0.1";
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "ms_manage.exe".into());
 
-    fn local_cfg(exe: &str, token: &str) -> serde_json::Value {
-        serde_json::json!({
-            "mcpServers": {
-                "ms-manage": {
-                    "command": exe,
-                    "args": ["serve"],
-                    "env": { "MCPR_TOKEN": token }
-                }
-            }
-        })
-    }
-
-    fn npx_cfg(host: &str, port: u16, token: &str) -> serde_json::Value {
-        let mut env = serde_json::Map::new();
-        env.insert("MS_MANAGE_URL".into(), serde_json::Value::String(format!("http://{host}:{port}/mcp")));
-        if !token.is_empty() {
-            env.insert("MS_MANAGE_TOKEN".into(), serde_json::Value::String(token.into()));
-        }
-        serde_json::json!({
-            "mcpServers": {
-                "ms-manage": {
-                    "command": "npx",
-                    "args": ["-y", "@ms-manage/cli@latest", "connect"],
-                    "env": serde_json::Value::Object(env)
-                }
-            }
-        })
-    }
-
     let cfg = if use_npx { npx_cfg(host, port, &token) } else { local_cfg(&exe, &token) };
     let mut written = Vec::new();
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -526,5 +499,5 @@ pub fn export_mcp(path: String, mode: String) {
         eprintln!("write {path}: {e}");
         std::process::exit(1);
     }
-    println!("。exported to {}", p.display());
+    println!(". exported to {}", p.display());
 }
