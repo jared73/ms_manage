@@ -87,14 +87,30 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
     let mut reader = BufReader::new(read);
 
     // 极简 HTTP 解析 —— 只支持 GET / POST，足够 MCP 协议
+    // 限制请求行和单个头部的大小，防止恶意本地进程发送超长行耗尽内存。
+    const MAX_REQUEST_LINE: usize = 8192;
+    const MAX_HEADER_LINE: usize = 8192;
+    const MAX_HEADERS: usize = 64;
+
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
+    if request_line.len() > MAX_REQUEST_LINE {
+        anyhow::bail!("request line too long: {} bytes", request_line.len());
+    }
     let mut headers = std::collections::HashMap::new();
     let mut content_length: usize = 0;
+    let mut header_count = 0usize;
     loop {
         let mut line = String::new();
         let n = reader.read_line(&mut line).await?;
         if n == 0 || line == "\r\n" || line == "\n" { break; }
+        header_count += 1;
+        if header_count > MAX_HEADERS {
+            anyhow::bail!("too many headers: >{MAX_HEADERS}");
+        }
+        if line.len() > MAX_HEADER_LINE {
+            anyhow::bail!("header line too long: {} bytes", line.len());
+        }
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim().to_lowercase();
             let v = v.trim().to_string();
@@ -226,8 +242,12 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
         }
         // 健康检查 + 根路径
         ("GET", "/") | ("GET", "/health") => {
+            let resp = format!(
+                "{{\"status\":\"ok\",\"proxy\":\"ms-manage\",\"version\":\"{}\"}}",
+                env!("CARGO_PKG_VERSION")
+            );
             let _ = write_all(&mut write,
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\",\"proxy\":\"ms-manage\",\"version\":\"0.2.0\"}"
+                format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{resp}").as_bytes()
             ).await;
         }
         // CORS preflight

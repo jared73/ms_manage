@@ -20,10 +20,8 @@
 use super::{SkillTarget, StoredSkill};
 use crate::symlink;
 use anyhow::{Context, Result};
-use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 pub const SKILL_FILE: &str = "SKILL.md";
 
@@ -259,9 +257,4 @@ fn list_files_relative(dir: &Path) -> Vec<String> {
     walk(dir, dir, &mut files);
     files.sort();
     files
-}
-
-/// （旧版 API，保留兼容）
-pub fn set_targets(targets_lock: &Arc<RwLock<Vec<PathBuf>>>, new_targets: Vec<PathBuf>) {
-    *targets_lock.write() = new_targets;
 }

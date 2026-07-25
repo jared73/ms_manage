@@ -242,7 +242,7 @@ export function useInstallFlow(): UseInstallFlow {
           if (r.ok) state.succeeded.push(s.name);
           else state.failed.push({ name: s.name, msg: r.message });
         } catch (e) {
-          state.failed.push({ name: s.name, msg: String(e) });
+          state.failed.push({ name: s.name, msg: describeError(e) });
         }
         state.done += 1;
         state.current = null;

@@ -150,7 +150,7 @@ export function Settings() {
                 void updateSettings(updated); // 自动保存，不用点"保存"按钮
               }} />
             <span className="ml-2 text-xs text-fg-muted">
-              {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"npm.taobao.org"}</code>
+              {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"registry.npmmirror.com"}</code>
             </span>
           </Row>
         </div>

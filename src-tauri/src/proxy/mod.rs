@@ -320,7 +320,7 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ms-manage-proxy", "version": "0.2.0" }
+            "clientInfo": { "name": "ms-manage-proxy", "version": env!("CARGO_PKG_VERSION") }
         }
     });
     child_srv.stdin.write_all(format!("{}\n", init_req).as_bytes()).await?;
@@ -457,7 +457,7 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ms-manage-viewer", "version": "0.2.0" }
+            "clientInfo": { "name": "ms-manage-viewer", "version": env!("CARGO_PKG_VERSION") }
         }
     });
     stdin.write_all(format!("{}\n", init).as_bytes()).await.map_err(|e| format!("write init: {e}"))?;
@@ -550,7 +550,7 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": { "name": "ms-manage-test", "version": "0.2.0" }
+            "clientInfo": { "name": "ms-manage-test", "version": env!("CARGO_PKG_VERSION") }
         }
     });
     let _ = stdin.write_all(format!("{}\n", init).as_bytes()).await;

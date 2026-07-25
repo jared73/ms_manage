@@ -68,7 +68,7 @@ export interface Skill {
   description?: string;
   content: string;            // markdown 原文
   frontmatter: Record<string, unknown>;
-  file_path: string;
+  dir_path: string;           // skill 目录绝对路径（对应 Rust StoredSkill.dir_path）
   enabled: boolean;
   created_at: string;
   updated_at: string;

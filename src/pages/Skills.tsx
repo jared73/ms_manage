@@ -564,7 +564,7 @@ function blankSkill(): Skill {
     description: "",
     content: `---\nname: ${name}\ndescription: 在此写 Skill 的简要描述\n---\n\n# ${name}\n\n在此编写 Skill 的 Markdown 内容。\n`,
     frontmatter: { name, description: "" },
-    file_path: "",
+    dir_path: "",
     enabled: true,
     created_at: now,
     updated_at: now,
