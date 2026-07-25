@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File } from "lucide-react";
+import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
@@ -26,6 +26,18 @@ export function Skills() {
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // 自由文本搜索:过滤 name/description,大小写不敏感。
+  // Skills 数量一般 < 50,在前端过滤就够了;不需要走 IPC。
+  const [search, setSearch] = useState("");
+  const visibleSkills = useMemo(() => {
+    if (!search.trim()) return skills;
+    const q = search.toLowerCase();
+    return skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.description ?? "").toLowerCase().includes(q),
+    );
+  }, [skills, search]);
   // 每行单独追踪 in-flight 操作,防止双击/重复请求导致竞态
   const [busyIds, setBusyIds] = useState<Record<string, "toggle" | "delete">>({});
   const markBusy = (id: string, kind: "toggle" | "delete") => setBusyIds((m) => ({ ...m, [id]: kind }));
@@ -157,6 +169,14 @@ export function Skills() {
         title={t("skills.title")}
         action={
           <div className="flex gap-2">
+            <input
+              type="search"
+              className="input max-w-[180px]"
+              placeholder={t("skills.search_placeholder") as string}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label={t("skills.search_label") as string}
+            />
             <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title={t("skills.install_from_zip_tooltip") as string}>
               <Upload size={14}/>{t("skills.install_from_zip")}
             </button>
@@ -169,9 +189,14 @@ export function Skills() {
       >
         {skills.length === 0 ? (
           <EmptyHint>{t("common.empty")}</EmptyHint>
+        ) : visibleSkills.length === 0 ? (
+          <div className="rounded-md border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
+            <Search size={20} className="mx-auto mb-2 opacity-50" />
+            {t("skills.no_match", { q: search })}
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {skills.map((s) => (
+            {visibleSkills.map((s) => (
               <div key={s.id} className="card group">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
