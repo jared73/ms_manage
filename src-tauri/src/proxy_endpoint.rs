@@ -129,7 +129,8 @@ pub async fn get_exposed_tools(state: State<'_, Arc<AppState>>) -> Result<Vec<se
     let ids = reg.list_ids().await;
 
     // 用注入的 state 读 servers（之前误用 AppState::initialize() 创建全新实例，浪费 IO）。
-    let servers = state.storage.load_servers().unwrap_or_default();
+    // 如果 servers.json 损坏，返回错误而非静默返回空列表。
+    let servers = state.storage.load_servers().map_err(|e| e.to_string())?;
     let disabled_map: std::collections::HashMap<String, std::collections::HashSet<String>> =
         servers.into_iter()
             .map(|s| (s.id, s.disabled_tools.into_iter().collect()))

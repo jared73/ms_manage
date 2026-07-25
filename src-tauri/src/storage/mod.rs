@@ -335,6 +335,33 @@ impl Storage {
         Ok((true, changed))
     }
 
+    /// 原子地 upsert（更新或插入）一条 server 记录。
+    /// 持有写锁，避免并发 IPC 覆盖彼此。
+    /// 返回 true 表示更新了已有记录，false 表示新插入。
+    pub fn upsert_server(&self, server: &StoredServer) -> Result<bool> {
+        let _guard = self.servers_lock.write();
+        let mut list = servers::load(&self.servers_file())?;
+        if let Some(slot) = list.iter_mut().find(|s| s.id == server.id) {
+            *slot = server.clone();
+            slot.updated_at = chrono::Utc::now().to_rfc3339();
+            servers::save(&self.servers_file(), &list)?;
+            Ok(true)
+        } else {
+            list.push(server.clone());
+            servers::save(&self.servers_file(), &list)?;
+            Ok(false)
+        }
+    }
+
+    /// 原子地删除一条 server 记录。
+    pub fn remove_server(&self, id: &str) -> Result<()> {
+        let _guard = self.servers_lock.write();
+        let mut list = servers::load(&self.servers_file())?;
+        list.retain(|s| s.id != id);
+        servers::save(&self.servers_file(), &list)?;
+        Ok(())
+    }
+
 
     pub fn load_skills(&self) -> Result<Vec<StoredSkill>> {
         skills::load_all(&self.skills_dir())
@@ -352,6 +379,24 @@ impl Storage {
         projects::save(&self.projects_file(), list)
     }
 
+    /// 原子地 upsert（更新或插入）一条 project 记录。
+    pub fn upsert_project(&self, project: &StoredProject) -> Result<()> {
+        let mut list = projects::load(&self.projects_file())?;
+        if let Some(slot) = list.iter_mut().find(|p| p.id == project.id) {
+            *slot = project.clone();
+        } else {
+            list.push(project.clone());
+        }
+        projects::save(&self.projects_file(), &list)
+    }
+
+    /// 原子地删除一条 project 记录。
+    pub fn remove_project(&self, id: &str) -> Result<()> {
+        let mut list = projects::load(&self.projects_file())?;
+        list.retain(|p| p.id != id);
+        projects::save(&self.projects_file(), &list)
+    }
+
     /// 从 settings 拿当前配置的 HTTP 端口（用于 get_proxy_status）
     pub fn proxy_stats_loaded_port(&self) -> Option<u16> {
         self.load_settings().ok().map(|s| s.proxy_http_port)
@@ -365,6 +410,9 @@ impl Storage {
             }
         }
         // 慢路径:读盘 + 解析 + 必要的自愈落盘,落盘后塞进缓存。
+        // 冷启动并发:多个线程同时看到空缓存时,可能各自生成 token 并写盘,
+        // 但只会有第一个写入生效(原子写 rename),后续的覆盖它。
+        // 影响仅限冷启动阶段,实际场景只有一个 GUI 线程,不需要加锁。
         let p = self.settings_file();
         if !p.exists() {
             let d = StoredSettings::default();

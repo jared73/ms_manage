@@ -109,7 +109,26 @@ fn percent_encode(s: &str) -> String {
 fn decompress_tar_gz(bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
     let gz = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(gz);
-    archive.unpack(dest).map_err(|e| format!("unpack failed: {e}"))
+    // 手动遍历 entries 并校验路径，防止 tar 里的 .. 或绝对路径写到 dest 目录外
+    // (tar::Archive::unpack 不做路径清理)
+    for entry in archive.entries().map_err(|e| format!("read tar entries: {e}"))? {
+        let mut entry = entry.map_err(|e| format!("read tar entry: {e}"))?;
+        let entry_path = entry.path().map_err(|e| format!("tar entry path: {e}"))?;
+        // 跳过绝对路径和含 .. 的条目
+        if entry_path.is_absolute() { continue; }
+        if entry_path.components().any(|c| matches!(c, std::path::Component::ParentDir)) { continue; }
+        let outpath = dest.join(&entry_path);
+        if entry.header().entry_type() == tar::EntryType::Directory {
+            std::fs::create_dir_all(&outpath).map_err(|e| format!("create dir: {e}"))?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("create parent: {e}"))?;
+            }
+            let mut out = std::fs::File::create(&outpath).map_err(|e| format!("create file: {e}"))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| format!("write file: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {

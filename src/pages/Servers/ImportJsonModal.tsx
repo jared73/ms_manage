@@ -5,6 +5,7 @@ import { Modal } from "@/components/Modal";
 import { upsertServer } from "@/lib/ipc";
 import type { McpServer } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
+import DOMPurify from "dompurify";
 
 /**
  * 从标准 mcpServers JSON 批量导入。
@@ -127,7 +128,7 @@ export function ImportJsonModal({
             spellCheck={false}
           />
           <p className="mt-1 text-xs text-fg-muted"
-            dangerouslySetInnerHTML={{ __html: t("servers.import_json_description") as string }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t("servers.import_json_description") as string) }}
           />
         </div>
 

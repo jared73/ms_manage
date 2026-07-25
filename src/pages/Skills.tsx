@@ -385,7 +385,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
     >
       <div className="space-y-3">
         <div className="rounded-md border border-border bg-bg-subtle p-3 text-xs text-fg-muted"
-          dangerouslySetInnerHTML={{ __html: t("skills.import_modal_hint") as string }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t("skills.import_modal_hint") as string) }}
         />
         <div>
           <label className="mb-1 block text-sm text-fg-muted">{t("skills.target_add_placeholder_path")}</label>

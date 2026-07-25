@@ -369,7 +369,9 @@ fn update_install_state<F: FnOnce(&mut StoredServer) -> bool>(
     id: &str,
     f: F,
 ) {
-    let _ = mutate_server(state.inner(), id, f);
+    if let Err(e) = mutate_server(state.inner(), id, f) {
+        eprintln!("[cmd_install] update_install_state({id}) failed: {e}");
+    }
 }
 
 async fn update_install_state_from<F: FnOnce(&mut StoredServer) -> bool>(
@@ -378,19 +380,23 @@ async fn update_install_state_from<F: FnOnce(&mut StoredServer) -> bool>(
     f: F,
 ) {
     let Some(st) = crate::state::try_current() else { return; };
-    let _ = mutate_server(&st, &s.id, f);
+    if let Err(e) = mutate_server(&st, &s.id, f) {
+        eprintln!("[cmd_install] update_install_state_from({}) failed: {e}", s.id);
+    }
 }
 
 fn write_back(state: &State<'_, Arc<AppState>>, id: &str, updated: &StoredServer) {
     let st = state.inner().clone();
     let updated = updated.clone();
-    let _ = mutate_server(&st, id, |slot| {
+    if let Err(e) = mutate_server(&st, id, |slot| {
         // 保留并发任务可能刚更新的安装字段之外的全部字段
         let keep_updated_at = slot.updated_at.clone();
         *slot = updated.clone();
         slot.updated_at = keep_updated_at;
         true
-    });
+    }) {
+        eprintln!("[cmd_install] write_back({id}) failed: {e}");
+    }
 }
 
 /// 启动时优先用 installed_path 解析命令。

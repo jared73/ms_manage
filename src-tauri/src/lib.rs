@@ -80,7 +80,7 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
             let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(app.default_window_icon().cloned().expect("window icon must be set"))
                 .tooltip("MS Manage")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)

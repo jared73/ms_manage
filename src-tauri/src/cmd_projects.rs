@@ -37,17 +37,13 @@ pub fn upsert_project(project: serde_json::Value, state: State<'_, Arc<AppState>
     let now = Utc::now().to_rfc3339();
     if p.created_at.is_empty() { p.created_at = now.clone(); }
     p.updated_at = now;
-    let mut list = state.storage.load_projects().map_err(|e| e.to_string())?;
-    // 唯一性：name 大小写不敏感（与 mcp-router 一致）
+    // 唯一性：name 大小写不敏感
+    let list = state.storage.load_projects().map_err(|e| e.to_string())?;
     if list.iter().any(|x| x.id != p.id && x.name.to_lowercase() == p.name.to_lowercase()) {
         return Err(format!("项目名 '{}' 已存在", p.name));
     }
-    if let Some(pos) = list.iter().position(|x| x.id == p.id) {
-        list[pos] = p.clone();
-    } else {
-        list.push(p.clone());
-    }
-    state.storage.save_projects(&list).map_err(|e| e.to_string())?;
+    // 原子 upsert（更新或插入），持有写锁避免并发覆盖
+    state.storage.upsert_project(&p).map_err(|e| e.to_string())?;
     Ok(from_stored(&p))
 }
 
@@ -56,20 +52,18 @@ pub fn delete_project(id: String, state: State<'_, Arc<AppState>>) -> Result<(),
     if id == UNASSIGNED_PROJECT_ID {
         return Err("无法删除「未分组」".into());
     }
-    let mut list = state.storage.load_projects().map_err(|e| e.to_string())?;
+    let list = state.storage.load_projects().map_err(|e| e.to_string())?;
     if !list.iter().any(|x| x.id == id) {
         return Err("项目不存在".into());
     }
-    list.retain(|x| x.id != id);
-    state.storage.save_projects(&list).map_err(|e| e.to_string())?;
+    // 原子删除 project
+    state.storage.remove_project(&id).map_err(|e| e.to_string())?;
     // 级联：把 server 的 project_id 重置为 None（移到「未分组」）
-    let mut servers = state.storage.load_servers().map_err(|e| e.to_string())?;
-    for s in servers.iter_mut() {
-        if s.project_id.as_deref() == Some(&id) {
-            s.project_id = None;
-            s.updated_at = Utc::now().to_rfc3339();
-        }
+    for sid in state.storage.load_servers().map_err(|e| e.to_string())?.iter().filter(|s| s.project_id.as_deref() == Some(&id)).map(|s| s.id.clone()) {
+        let _ = state.storage.mutate_server(&sid, |srv| {
+            srv.project_id = None;
+            true
+        });
     }
-    state.storage.save_servers(&servers).map_err(|e| e.to_string())?;
     Ok(())
 }

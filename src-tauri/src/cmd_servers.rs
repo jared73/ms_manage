@@ -213,21 +213,14 @@ pub fn upsert_server(server: serde_json::Value, state: State<'_, Arc<AppState>>)
     let now = Utc::now().to_rfc3339();
     if s.created_at.is_empty() { s.created_at = now.clone(); }
     s.updated_at = now;
-    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
-    if let Some(pos) = list.iter().position(|x| x.id == s.id) {
-        list[pos] = s.clone();
-    } else {
-        list.push(s.clone());
-    }
-    state.storage.save_servers(&list).map_err(|e| e.to_string())?;
+    // 原子 upsert（更新或插入），持有写锁避免并发覆盖
+    state.storage.upsert_server(&s).map_err(|e| e.to_string())?;
     Ok(from_stored(&s))
 }
 
 #[tauri::command]
 pub async fn delete_server(id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
-    list.retain(|s| s.id != id);
-    state.storage.save_servers(&list).map_err(|e| e.to_string())?;
+    state.storage.remove_server(&id).map_err(|e| e.to_string())?;
     crate::proxy::stop(&id).await;
     Ok(())
 }
