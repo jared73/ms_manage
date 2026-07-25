@@ -223,7 +223,8 @@ export function ServerDetailDrawer({
                         onClick={() => toggleTool(tool.name, !enabled)}
                         role="switch"
                         aria-checked={enabled}
-                        className={`relative mt-1 h-5 w-9 shrink-0 rounded-full transition-colors ${enabled ? "bg-accent" : "bg-overlay-soft"}`}
+                        aria-label={`${tool.name} ${enabled ? t("common.enabled") : t("common.disabled")}`}
+                        className={`relative mt-1 h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${enabled ? "bg-accent" : "bg-overlay-soft"}`}
                         title={enabled ? t("common.enabled") : t("common.disabled")}
                       >
                         <span

@@ -11,12 +11,31 @@ export interface InstallProgressEvent {
   message: string;
 }
 
-/** 表单字段统一壳。后续 i18n 收敛时改用 t() 渲染 label 即可。 */
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * 表单字段统一壳。
+ * - label 显示在控件上方
+ * - children 渲染实际控件(input/textarea/select)
+ * - error 在控件下方红字 + role="alert";
+ *   同时给所有 input/textarea 加红色边框状态。
+ */
+export function Field({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <div className="mb-1 text-xs text-fg-muted">{label}</div>
-      {children}
+      <div className={error ? "field-invalid" : ""}>{children}</div>
+      {error && (
+        <div className="mt-1 text-[11px] text-err" role="alert">
+          {error}
+        </div>
+      )}
     </div>
   );
 }

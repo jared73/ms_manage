@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
+import { Modal } from "@/components/Modal";
 import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, revealToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled, doctorCheck } from "@/lib/ipc";
 import type { AppSettings, DoctorItem } from "@/lib/ipc";
 import { useApp, previewTheme, readPersistedUi, type ThemeName } from "@/stores/app";
@@ -17,6 +18,11 @@ export function Settings() {
   const activeTheme = (storeSettings?.theme as ThemeName | undefined) ?? persistedTheme;
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
+  // Token 重置双确认:用户首次点"重新生成"时弹窗说明影响 + 让用户输入当前的 token 末 4 位
+  // (避免误点一刀斩断所有客户端的连接)
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [regenCode, setRegenCode] = useState("");
+  const [regenBusy, setRegenBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
@@ -89,6 +95,8 @@ export function Settings() {
   };
 
   const regen = async () => {
+    // 用户先在确认弹窗里点 "确认重新生成" 才能进这里 —— 二段确认
+    setRegenBusy(true);
     try {
       const { token: newToken } = await regenerateToken();
       // regen 返回完整 token —— 我们只在用户"复制"那一刻把它放进剪贴板,
@@ -100,10 +108,17 @@ export function Settings() {
       });
       const written = await rewriteClientConfigs(true);
       toast.success(t("settings.token_reset_success", { targets: written.join(", ") }) as string);
+      setConfirmRegen(false);
+      setRegenCode("");
     } catch (e) {
       toast.error(t("settings.token_reset_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setRegenBusy(false);
     }
   };
+
+  /** 当前 token 末 4 位,用于确认弹窗的二次校验(防止误点) */
+  const tokenTail = (settings?.mcp_token ?? "").split("***").pop() ?? "";
 
   /** 用户点"复制 token"时,显式问后端要真实 token(不会自动出现在 DOM/store 里)。 */
   const copyToken = async () => {
@@ -210,7 +225,8 @@ export function Settings() {
               onClick={() => handleAutoLaunch(!autoLaunch)}
               role="switch"
               aria-checked={autoLaunch}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
+              aria-label={t("settings.autostart_card_title")}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
               title={t(autoLaunch ? "common.enabled" : "common.disabled")}
             >
               <span
@@ -287,7 +303,7 @@ export function Settings() {
               )}
               <button
                 className="btn-ghost p-1.5"
-                onClick={regen}
+                onClick={() => setConfirmRegen(true)}
                 title={t("settings.token_regen_tooltip") as string}
               >
                 <RefreshCw size={14}/>
@@ -296,6 +312,52 @@ export function Settings() {
           </Row>
         </div>
       </Section>
+
+      {/* 重新生成 Token 双确认弹窗 */}
+      {confirmRegen && (
+        <Modal
+          open
+          size="sm"
+          title={t("settings.token_regen_confirm_title")}
+          onClose={() => { if (!regenBusy) { setConfirmRegen(false); setRegenCode(""); } }}
+          footer={
+            <>
+              <button
+                className="btn-ghost"
+                onClick={() => { setConfirmRegen(false); setRegenCode(""); }}
+                disabled={regenBusy}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
+                onClick={regen}
+                disabled={regenBusy || regenCode.trim() !== tokenTail}
+                title={regenCode.trim() !== tokenTail ? t("settings.token_regen_match_required") as string : undefined}
+              >
+                {regenBusy ? <Loader2 size={14} className="inline animate-spin mr-1" /> : null}
+                {t("settings.token_regen_confirm_btn")}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-fg-muted">{t("settings.token_regen_confirm_desc")}</p>
+          <div className="mt-3 rounded-md border border-border bg-bg-subtle p-3">
+            <div className="mb-1 text-[11px] text-fg-muted">{t("settings.token_regen_input_label")}</div>
+            <input
+              className="input font-mono"
+              value={regenCode}
+              onChange={(e) => setRegenCode(e.target.value)}
+              placeholder={tokenTail}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <div className="mt-1 text-[11px] text-fg-muted">
+              {t("settings.token_regen_input_hint", { tail: tokenTail })}
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -18,6 +18,8 @@ export function Dashboard() {
   const [info, setInfo] = useState<{ version: string } | null>(null);
   const [exposedTools, setExposedTools] = useState<{ name: string; description?: string; __server: string }[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // 初始加载标识：首屏未拉到数据时显示骨架，避免闪烁 0 值
+  const [initialLoad, setInitialLoad] = useState(true);
 
   // 静态值（版本号）只取一次
   useEffect(() => {
@@ -46,6 +48,7 @@ export function Dashboard() {
         setExposedTools(Array.isArray(et) ? et : []);
       } finally {
         inFlightRef.current = false;
+        setInitialLoad(false);
       }
     };
     void load();
@@ -57,6 +60,7 @@ export function Dashboard() {
   const enabledSkills = skills.filter((s) => s.enabled).length;
   const totalDisabled = servers.reduce((acc, s) => acc + (s.server.disabled_tools?.length ?? 0), 0);
   const proxyOn = !!proxy?.running;
+  const dash = (v: number | string) => initialLoad ? "—" : v;
 
   return (
     <div className="space-y-6 p-6">
@@ -90,10 +94,10 @@ export function Dashboard() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard icon={<Server size={16} />} label={t("dashboard.stats.servers_total")} value={servers.length} bar="bg-fg-muted" />
-        <StatCard icon={<Activity size={16} />} label={t("dashboard.stats.servers_running")} value={runningCount} bar="bg-ok" accent={runningCount > 0} />
-        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_total")} value={skills.length} bar="bg-warn" />
-        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_enabled")} value={enabledSkills} bar="bg-accent" accent={enabledSkills > 0} />
+        <StatCard icon={<Server size={16} />} label={t("dashboard.stats.servers_total")} value={dash(servers.length)} bar="bg-fg-muted" />
+        <StatCard icon={<Activity size={16} />} label={t("dashboard.stats.servers_running")} value={dash(runningCount)} bar="bg-ok" accent={!initialLoad && runningCount > 0} />
+        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_total")} value={dash(skills.length)} bar="bg-warn" />
+        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_enabled")} value={dash(enabledSkills)} bar="bg-accent" accent={!initialLoad && enabledSkills > 0} />
       </div>
 
       {/* 已暴露给客户端的工具（按 server 聚合） */}
@@ -183,7 +187,7 @@ export function Dashboard() {
   );
 }
 
-function StatCard({ icon, label, value, accent, bar }: { icon: React.ReactNode; label: string; value: number; accent?: boolean; bar: string }) {
+function StatCard({ icon, label, value, accent, bar }: { icon: React.ReactNode; label: string; value: number | string; accent?: boolean; bar: string }) {
   return (
     <div className="card relative overflow-hidden pl-5 transition-transform hover:-translate-y-0.5">
       <div className={`absolute left-0 top-0 h-full w-1 ${bar}`} />

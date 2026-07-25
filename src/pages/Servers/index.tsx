@@ -72,6 +72,9 @@ export function Servers() {
   // ---- 操作中的 id 集合 ----
   const [startingIds, setStartingIds] = useState<Set<string>>(new Set());
   const [stoppingIds, setStoppingIds] = useState<Set<string>>(new Set());
+  // 测试/探测/删除等其他异步操作的 in-flight 集合
+  const [probingIds, setProbingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   // 安装进度 + 批量流程(独立 hook)
   const install = useInstallFlow();
@@ -120,16 +123,26 @@ export function Servers() {
   const needsInstall = (s: McpServer): boolean => s.needs_install === true;
 
   const handleDelete = async (s: McpServer) => {
+    if (deletingIds.has(s.id)) return;
+    setDeletingIds((prev) => new Set(prev).add(s.id));
     try {
       await deleteServer(s.id);
       await load();
       toast.success(t("servers.toast_deleted", { name: s.name }) as string, { duration: 2000 });
     } catch (e) {
       toast.error(t("servers.toast_delete_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setDeletingIds((prev) => {
+        const n = new Set(prev);
+        n.delete(s.id);
+        return n;
+      });
     }
   };
 
   const handleTest = async (s: McpServer) => {
+    if (probingIds.has(s.id)) return;
+    setProbingIds((prev) => new Set(prev).add(s.id));
     const tid = `test-${s.id}`;
     toast.loading(t("servers.toast_testing", { name: s.name }) as string, { id: tid });
     try {
@@ -144,6 +157,12 @@ export function Servers() {
       }
     } catch (e) {
       toast.error(t("servers.toast_test_error", { msg: describeError(e) }) as string, { id: tid });
+    } finally {
+      setProbingIds((prev) => {
+        const n = new Set(prev);
+        n.delete(s.id);
+        return n;
+      });
     }
   };
 
@@ -436,6 +455,8 @@ export function Servers() {
                     projectName={projectNameById.get(s.project_id ?? "") ?? "—"}
                     isStarting={startingIds.has(s.id)}
                     isStopping={stoppingIds.has(s.id)}
+                    isProbing={probingIds.has(s.id)}
+                    isDeleting={deletingIds.has(s.id)}
                     isInstalling={
                       install.installingIds.has(s.id) || install.batch !== null
                     }
@@ -488,18 +509,23 @@ export function Servers() {
           open
           size="sm"
           title={t("common.confirm")}
-          onClose={() => setConfirmDelete(null)}
+          onClose={() => { if (!deletingIds.has(confirmDelete.id)) setConfirmDelete(null); }}
           footer={
             <>
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>{t("common.cancel")}</button>
+              <button className="btn-ghost" onClick={() => setConfirmDelete(null)} disabled={deletingIds.has(confirmDelete.id)}>{t("common.cancel")}</button>
               <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg"
+                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
                 onClick={async () => {
                   const target = confirmDelete;
+                  if (deletingIds.has(target.id)) return;
                   setConfirmDelete(null);
-                  if (target) await handleDelete(target);
+                  await handleDelete(target);
                 }}
+                disabled={deletingIds.has(confirmDelete.id)}
               >
+                {deletingIds.has(confirmDelete.id) ? (
+                  <Loader2 size={14} className="inline animate-spin mr-1" />
+                ) : null}
                 {t("common.delete")}
               </button>
             </>
@@ -586,10 +612,12 @@ interface ServerRowProps {
   isStopping: boolean;
   isInstalling: boolean;
   isUninstalling: boolean;
+  isProbing: boolean;
+  isDeleting: boolean;
   installProgress?: { stage: string; message: string };
   /**
    * 稳定的 useCallback 派发器。父组件不应传新箭头,否则 memo 会失效。
-   * memo 比较 server / state / projectName / 5 个 bool / progress(text) 是否变化,
+   * memo 比较 server / state / projectName / 7 个 bool / progress(text) 是否变化,
    *  不变就跳过整行重渲。
    */
   onAction: (action: ServerRowAction, server: McpServer) => void;
@@ -603,12 +631,16 @@ const ServerRow = React.memo(function ServerRow({
   isStopping,
   isInstalling,
   isUninstalling,
+  isProbing,
+  isDeleting,
   installProgress,
   onAction,
 }: ServerRowProps) {
   const { t } = useTranslation();
   const showInstall = s.needs_install === true;
   const startBlocked = showInstall && !s.installed;
+  // 任意动作进行中(启动/停止/测试/删除),编辑/导出/探测等都要锁定
+  const anyBusy = isStarting || isStopping || isProbing || isDeleting;
 
   return (
     <tr className="border-t border-border hover:bg-overlay-soft">
@@ -702,9 +734,9 @@ const ServerRow = React.memo(function ServerRow({
         <div className="flex justify-end gap-1">
           {st?.status === "running" ? (
             <button
-              className="btn-ghost p-1.5 text-err hover:opacity-80"
+              className="btn-ghost p-1.5 text-err hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => onAction("stop", s)}
-              disabled={isStopping}
+              disabled={isStopping || isProbing || isDeleting}
               title={t("common.stop")}
             >
               {isStopping ? (
@@ -717,39 +749,51 @@ const ServerRow = React.memo(function ServerRow({
             <button
               className="btn-ghost p-1.5 text-ok disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={() => onAction("start", s)}
-              disabled={isStarting || startBlocked}
+              disabled={isStarting || startBlocked || isProbing || isDeleting}
               title={startBlocked ? t("servers.preinst_required_for_start") : t("common.start")}
             >
               {isStarting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             </button>
           )}
           <button
-            className="btn-ghost p-1.5 text-amber-400 hover:text-amber-300"
+            className="btn-ghost p-1.5 text-amber-400 hover:text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onAction("test", s)}
+            disabled={anyBusy}
             title={t("common.test")}
           >
-            <TestTube2 size={14} />
+            {isProbing ? (
+              <Loader2 size={14} className="animate-spin text-amber-400" />
+            ) : (
+              <TestTube2 size={14} />
+            )}
           </button>
           <button
-            className="btn-ghost p-1.5 text-accent hover:opacity-80"
+            className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onAction("edit", s)}
+            disabled={anyBusy}
             title={t("common.edit")}
           >
             <Pencil size={14} />
           </button>
           <button
-            className="btn-ghost p-1.5 text-fg-muted hover:text-fg"
+            className="btn-ghost p-1.5 text-fg-muted hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onAction("export", s)}
+            disabled={anyBusy}
             title={t("servers.export_single_btn_title") as string}
           >
             <FileJson size={14} />
           </button>
           <button
-            className="btn-ghost p-1.5 text-err hover:text-err/80"
+            className="btn-ghost p-1.5 text-err hover:text-err/80 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onAction("delete", s)}
+            disabled={anyBusy}
             title={t("common.delete")}
           >
-            <Trash2 size={14} />
+            {isDeleting ? (
+              <Loader2 size={14} className="animate-spin text-err" />
+            ) : (
+              <Trash2 size={14} />
+            )}
           </button>
         </div>
       </td>

@@ -21,10 +21,14 @@ export function Skills() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [creating, setCreating] = useState(false);
-  const [targets, setTargets] = useState<SkillTarget[]>([]);
+  const [targets, setTargets] = useState<SkillTarget[]>(([]));
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // 每行单独追踪 in-flight 操作,防止双击/重复请求导致竞态
+  const [busyIds, setBusyIds] = useState<Record<string, "toggle" | "delete">>({});
+  const markBusy = (id: string, kind: "toggle" | "delete") => setBusyIds((m) => ({ ...m, [id]: kind }));
+  const clearBusy = (id: string) => setBusyIds((m) => { const { [id]: _, ...rest } = m; return rest; });
 
   const load = async () => {
     try {
@@ -95,31 +99,43 @@ export function Skills() {
   };
 
   const handleDelete = async (s: Skill) => {
+    if (busyIds[s.id]) return;
+    markBusy(s.id, "delete");
     try {
       await deleteSkill(s.id);
       await load();
       toast.success(t("skills.deleted", { name: s.name }) as string, { duration: 2000 });
     } catch (e) {
       toast.error(t("skills.delete_failed", { msg: describeError(e) }) as string);
+    } finally {
+      clearBusy(s.id);
     }
   };
 
   const handleToggle = async (s: Skill) => {
+    if (busyIds[s.id]) return;
+    markBusy(s.id, "toggle");
     try {
       await toggleSkill(s.id, !s.enabled);
       await load();
     } catch (e) {
       toast.error(t("skills.toggle_failed", { msg: describeError(e) }) as string);
+    } finally {
+      clearBusy(s.id);
     }
   };
 
   const handleTargetDelete = async (tg: SkillTarget) => {
+    if (busyIds[`target:${tg.id}`]) return;
+    markBusy(`target:${tg.id}`, "delete");
     try {
       await removeSkillTarget(tg.id);
       await load();
       toast.success(t("skills.target_deleted", { name: tg.name }) as string, { duration: 2000 });
     } catch (e) {
       toast.error(t("skills.target_delete_failed", { msg: describeError(e) }) as string);
+    } finally {
+      clearBusy(`target:${tg.id}`);
     }
   };
 
@@ -186,13 +202,35 @@ export function Skills() {
                   <div className="text-[11px] text-fg-muted">{new Date(s.updated_at).toLocaleString()}</div>
                   <div className="flex gap-1">
                     {/* 启停：绿色 */}
-                    <button className="btn-ghost p-1.5 text-ok" onClick={() => handleToggle(s)} title={s.enabled ? t("common.disable") : t("common.enable")}>
-                      {s.enabled ? <EyeOff size={14}/> : <Eye size={14}/>}
+                    <button
+                      className="btn-ghost p-1.5 text-ok disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => handleToggle(s)}
+                      disabled={!!busyIds[s.id]}
+                      title={s.enabled ? t("common.disable") : t("common.enable")}
+                    >
+                      {busyIds[s.id] === "toggle" ? (
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ok border-t-transparent" />
+                      ) : s.enabled ? <EyeOff size={14}/> : <Eye size={14}/>}
                     </button>
                     {/* 编辑：蓝色 */}
-                    <button className="btn-ghost p-1.5 text-accent hover:opacity-80" onClick={() => setEditing(s)}><Pencil size={14}/></button>
+                    <button
+                      className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => setEditing(s)}
+                      disabled={!!busyIds[s.id]}
+                    >
+                      <Pencil size={14}/>
+                    </button>
                     {/* 删除：红色 */}
-                    <button className="btn-ghost p-1.5 text-err hover:text-err/80" onClick={() => setConfirmDelete(s)} title={t("common.delete")}><Trash2 size={14}/></button>
+                    <button
+                      className="btn-ghost p-1.5 text-err hover:text-err/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => setConfirmDelete(s)}
+                      disabled={!!busyIds[s.id]}
+                      title={t("common.delete")}
+                    >
+                      {busyIds[s.id] === "delete" ? (
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-err border-t-transparent" />
+                      ) : <Trash2 size={14}/>}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -265,14 +303,16 @@ export function Skills() {
           onClose={() => setConfirmDelete(null)}
           footer={
             <>
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>{t("common.cancel")}</button>
+              <button className="btn-ghost" onClick={() => setConfirmDelete(null)} disabled={!!busyIds[confirmDelete.id]}>{t("common.cancel")}</button>
               <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg"
+                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
                 onClick={async () => {
                   const target = confirmDelete;
+                  if (busyIds[target.id]) return;
                   setConfirmDelete(null);
-                  if (target) await handleDelete(target);
+                  await handleDelete(target);
                 }}
+                disabled={!!busyIds[confirmDelete.id]}
               >
                 {t("common.delete")}
               </button>
@@ -296,14 +336,16 @@ export function Skills() {
           onClose={() => setConfirmTargetDelete(null)}
           footer={
             <>
-              <button className="btn-ghost" onClick={() => setConfirmTargetDelete(null)}>{t("common.cancel")}</button>
+              <button className="btn-ghost" onClick={() => setConfirmTargetDelete(null)} disabled={!!busyIds[`target:${confirmTargetDelete.id}`]}>{t("common.cancel")}</button>
               <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg"
+                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
                 onClick={async () => {
                   const target = confirmTargetDelete;
+                  if (busyIds[`target:${target.id}`]) return;
                   setConfirmTargetDelete(null);
-                  if (target) await handleTargetDelete(target);
+                  await handleTargetDelete(target);
                 }}
+                disabled={!!busyIds[`target:${confirmTargetDelete.id}`]}
               >
                 {t("common.delete")}
               </button>
@@ -417,9 +459,13 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
 
 function TargetRow({ target, onReload, onAskDelete, onAskEdit }: { target: SkillTarget; onReload: () => Promise<void>; onAskDelete: (t: SkillTarget) => void; onAskEdit: (t: SkillTarget) => void }) {
   const { t } = useTranslation();
+  const [busy, setBusy] = useState<"toggle" | null>(null);
   const handleToggle = async () => {
+    if (busy) return;
+    setBusy("toggle");
     try { await toggleSkillTarget(target.id, !target.enabled); await onReload(); }
     catch (e) { toast.error(t("skills.toggle_failed", { msg: describeError(e) }) as string); }
+    finally { setBusy(null); }
   };
   return (
     <div className="flex items-center gap-2 rounded-md bg-bg-subtle px-3 py-2">
@@ -428,7 +474,10 @@ function TargetRow({ target, onReload, onAskDelete, onAskEdit }: { target: Skill
         onClick={handleToggle}
         role="switch"
         aria-checked={target.enabled}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${target.enabled ? "bg-accent" : "bg-overlay-soft"}`}
+        aria-label={`${target.name} ${target.enabled ? t("common.enabled") : t("common.disabled")}`}
+        disabled={!!busy}
+        aria-busy={!!busy}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${target.enabled ? "bg-accent" : "bg-overlay-soft"}`}
         title={target.enabled ? t("common.enabled") : t("common.disabled")}
       >
         <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${target.enabled ? "left-4" : "left-0.5"}`} />
@@ -436,8 +485,8 @@ function TargetRow({ target, onReload, onAskDelete, onAskEdit }: { target: Skill
       <div className="w-32 shrink-0 text-sm font-medium">{target.name}</div>
       <code className="flex-1 truncate text-xs text-fg-muted">{target.path}</code>
       {target.builtin && <span className="badge-mute text-[10px]">{t("skills.targets_builtin_badge")}</span>}
-      <button className="btn-ghost p-1.5" onClick={() => onAskEdit(target)} title={t("skills.targets_edit_path_title")}><Pencil size={12}/></button>
-      {!target.builtin && <button className="btn-ghost p-1.5 text-err" onClick={() => onAskDelete(target)} title={t("skills.targets_delete_title")}><Trash2 size={12}/></button>}
+      <button className="btn-ghost p-1.5 disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskEdit(target)} disabled={!!busy} title={t("skills.targets_edit_path_title")}><Pencil size={12}/></button>
+      {!target.builtin && <button className="btn-ghost p-1.5 text-err disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskDelete(target)} disabled={!!busy} title={t("skills.targets_delete_title")}><Trash2 size={12}/></button>}
     </div>
   );
 }

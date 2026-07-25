@@ -40,13 +40,14 @@ export function Layout() {
               className={({ isActive }) =>
                 clsx(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-subtle",
                   isActive
                     ? "bg-accent/15 text-accent"
                     : "text-fg-muted hover:bg-overlay-soft hover:text-fg",
                 )
               }
             >
-              <Icon size={16} />
+              <Icon size={16} aria-hidden="true" />
               <span>{t(`nav.${key}`)}</span>
             </NavLink>
           ))}

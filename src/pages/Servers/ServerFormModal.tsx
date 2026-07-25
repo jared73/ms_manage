@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/Modal";
 import { upsertServer } from "@/lib/ipc";
@@ -27,20 +28,58 @@ export function ServerFormModal({
       .map(([k, v]) => `${k}=${v}`)
       .join("\n"),
   );
+  // 表单校验:把错误信息收集到 errors Map,Save 时校验;
+  // 用户在 Save 前看不到一堆红框,只在字段下方显示第一条错误
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  const validate = (): Record<string, string> => {
+    const e: Record<string, string> = {};
+    const name = s.name.trim();
+    if (!name) e.name = t("servers.validation_name_required");
+    else if (!/^[A-Za-z0-9._\-\s]{1,64}$/.test(name)) {
+      // 限制字符集:对应 mcp server id 用法,避免奇怪的 unicode / shell 注入字符
+      e.name = t("servers.validation_name_charset");
+    }
+    if (s.transport === "stdio") {
+      const cmd = (s.command ?? "").trim();
+      if (!cmd) e.command = t("servers.validation_command_required");
+      else if (/^[A-Za-z0-9._\-\/:]+$/.test(cmd) === false) {
+        // 允许 PATH 解析,所以接受 /: 和 .
+        e.command = t("servers.validation_command_charset");
+      }
+    } else {
+      const url = (s.url ?? "").trim();
+      if (!url) e.url = t("servers.validation_url_required");
+      else if (!/^https?:\/\//i.test(url)) {
+        e.url = t("servers.validation_url_scheme");
+      }
+    }
+    return e;
+  };
 
   const submit = async () => {
+    const v = validate();
+    setErrors(v);
+    if (Object.keys(v).length > 0) {
+      toast.error(t("servers.toast_validation_failed") as string);
+      return;
+    }
     const args = argsText.trim() ? argsText.split(/\s+/) : [];
     const env: Record<string, string> = {};
     envText.split(/\n/).forEach((line) => {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/i);
       if (m) env[m[1]] = m[2];
     });
+    setBusy(true);
     try {
       await upsertServer({ ...s, args, env, updated_at: new Date().toISOString() });
       await onSaved();
       toast.success(t("servers.toast_saved", { name: s.name }) as string, { duration: 1500 });
     } catch (e) {
       toast.error(t("servers.toast_save_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -93,10 +132,11 @@ export function ServerFormModal({
       onClose={onClose}
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose}>
+          <button className="btn-ghost" onClick={onClose} disabled={busy}>
             {t("common.cancel")}
           </button>
-          <button className="btn-primary" onClick={submit}>
+          <button className="btn-primary" onClick={submit} disabled={busy}>
+            {busy ? <Loader2 size={14} className="inline animate-spin mr-1" /> : null}
             {t("common.save")}
           </button>
         </>
@@ -115,11 +155,12 @@ export function ServerFormModal({
             </div>
           </div>
         )}
-        <Field label={t("common.name")}>
+        <Field label={t("common.name")} error={errors.name}>
           <input
             className="input"
             value={s.name}
             onChange={(e) => setS({ ...s, name: e.target.value })}
+            aria-invalid={errors.name ? "true" : undefined}
           />
         </Field>
         <Field label={t("common.description")}>
@@ -159,12 +200,13 @@ export function ServerFormModal({
 
         {s.transport === "stdio" && (
           <>
-            <Field label={t("common.command")}>
+            <Field label={t("common.command")} error={errors.command}>
               <input
                 className="input font-mono"
                 placeholder={t("servers.server_form_command_placeholder")}
                 value={s.command ?? ""}
                 onChange={(e) => setS({ ...s, command: e.target.value })}
+                aria-invalid={errors.command ? "true" : undefined}
               />
             </Field>
             <Field label={t("common.args")}>
@@ -196,12 +238,13 @@ export function ServerFormModal({
 
         {(s.transport === "sse" || s.transport === "http") && (
           <>
-            <Field label={t("common.url")}>
+            <Field label={t("common.url")} error={errors.url}>
               <input
                 className="input font-mono"
                 placeholder={t("servers.server_form_url_placeholder")}
                 value={s.url ?? ""}
                 onChange={(e) => setS({ ...s, url: e.target.value })}
+                aria-invalid={errors.url ? "true" : undefined}
               />
             </Field>
             <Field label={t("common.headers")}>

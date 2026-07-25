@@ -133,6 +133,17 @@ body { margin: 0; background: rgb(var(--bg)); color: rgb(var(--fg)); }
       border-color: rgb(var(--accent));
     }
   }
+  /* 表单校验失败样式:红边框 + 红色 focus ring */
+  .input-invalid {
+    border-color: rgb(var(--err)) !important;
+    &:focus {
+      border-color: rgb(var(--err)) !important;
+      box-shadow: 0 0 0 1px rgb(var(--err) / 0.4);
+    }
+  }
+  .field-invalid .input {
+    border-color: rgb(var(--err));
+  }
 
   .badge { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
   .badge-ok   { @apply badge bg-ok/15 text-ok; }
