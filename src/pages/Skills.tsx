@@ -7,6 +7,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
 import { Modal } from "@/components/Modal";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { toast } from "sonner";
 import {
   listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir,
@@ -294,73 +295,47 @@ export function Skills() {
         />
       )}
 
-      {/* 删除确认 Modal —— 防误删 */}
-      {confirmDelete && (
-        <Modal
-          open
-          size="sm"
-          title={t("common.confirm")}
-          onClose={() => setConfirmDelete(null)}
-          footer={
-            <>
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)} disabled={!!busyIds[confirmDelete.id]}>{t("common.cancel")}</button>
-              <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
-                onClick={async () => {
-                  const target = confirmDelete;
-                  if (busyIds[target.id]) return;
-                  setConfirmDelete(null);
-                  await handleDelete(target);
-                }}
-                disabled={!!busyIds[confirmDelete.id]}
-              >
-                {t("common.delete")}
-              </button>
-            </>
-          }
-        >
-          <p className="text-sm">
-            {t("skills.delete_confirm")}
-          </p>
-          <p className="mt-2 break-all font-mono text-xs text-fg-muted">
-            {confirmDelete.name}
-          </p>
-        </Modal>
-      )}
+      {/* 删除确认 Modal —— 用 ConfirmModal 抽取的共享组件 */}
+      <ConfirmModal
+        open={!!confirmDelete}
+        title={t("common.confirm")}
+        confirmLabel={t("common.delete")}
+        busy={!!confirmDelete && !!busyIds[confirmDelete.id]}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={async () => {
+          if (!confirmDelete) return;
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          await handleDelete(target);
+        }}
+      >
+        <p className="text-sm">{t("skills.delete_confirm")}</p>
+        {confirmDelete && (
+          <p className="mt-2 break-all font-mono text-xs text-fg-muted">{confirmDelete.name}</p>
+        )}
+      </ConfirmModal>
 
-      {confirmTargetDelete && (
-        <Modal
-          open
-          size="sm"
-          title={t("common.confirm")}
-          onClose={() => setConfirmTargetDelete(null)}
-          footer={
-            <>
-              <button className="btn-ghost" onClick={() => setConfirmTargetDelete(null)} disabled={!!busyIds[`target:${confirmTargetDelete.id}`]}>{t("common.cancel")}</button>
-              <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
-                onClick={async () => {
-                  const target = confirmTargetDelete;
-                  if (busyIds[`target:${target.id}`]) return;
-                  setConfirmTargetDelete(null);
-                  await handleTargetDelete(target);
-                }}
-                disabled={!!busyIds[`target:${confirmTargetDelete.id}`]}
-              >
-                {t("common.delete")}
-              </button>
-            </>
-          }
-        >
-          <p className="text-sm">
-            {t("skills.target_delete_confirm")}
-          </p>
+      <ConfirmModal
+        open={!!confirmTargetDelete}
+        title={t("common.confirm")}
+        confirmLabel={t("common.delete")}
+        busy={!!confirmTargetDelete && !!busyIds[`target:${confirmTargetDelete.id}`]}
+        onClose={() => setConfirmTargetDelete(null)}
+        onConfirm={async () => {
+          if (!confirmTargetDelete) return;
+          const target = confirmTargetDelete;
+          setConfirmTargetDelete(null);
+          await handleTargetDelete(target);
+        }}
+      >
+        <p className="text-sm">{t("skills.target_delete_confirm")}</p>
+        {confirmTargetDelete && (
           <p className="mt-2 break-all font-mono text-xs text-fg-muted">
             {confirmTargetDelete.name} <br />
             <code>{confirmTargetDelete.path}</code>
           </p>
-        </Modal>
-      )}
+        )}
+      </ConfirmModal>
     </div>
   );
 }

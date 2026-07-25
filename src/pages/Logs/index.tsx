@@ -10,16 +10,27 @@
  * - 拉取失败 → 在表格区显示红条 + 重试按钮(loadError)
  * - 空数据 → 表格显示 "暂无日志" 提示(由 LogTable 渲染)
  */
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Trash2, Download, AlertTriangle, Loader2 } from "lucide-react";
+import { Trash2, Download, AlertTriangle, Loader2, Search } from "lucide-react";
 import { Section } from "@/components/Section";
-import { Modal } from "@/components/Modal";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { useLogs } from "./useLogs";
 import { LogTable } from "./LogTable";
 
 export function Logs() {
   const { t } = useTranslation();
   const lg = useLogs();
+
+  // 自由文本搜索:过滤 message + source,大小写不敏感。
+  // 与 level/source filter 是 AND 关系(先 severity 过滤再文本过滤)。
+  const visibleLogs = useMemo(() => {
+    if (!lg.search.trim()) return lg.logs;
+    const q = lg.search.toLowerCase();
+    return lg.logs.filter(
+      (l) => l.message.toLowerCase().includes(q) || l.source.toLowerCase().includes(q),
+    );
+  }, [lg.logs, lg.search]);
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(lg.logs, null, 2)], { type: "application/json" });
@@ -55,6 +66,14 @@ export function Logs() {
               <option value="warn">warn</option>
               <option value="error">error</option>
             </select>
+            <input
+              type="search"
+              className="input max-w-[180px]"
+              placeholder={t("logs.search_placeholder") as string}
+              value={lg.search}
+              onChange={(e) => lg.setSearch(e.target.value)}
+              aria-label={t("logs.search_label") as string}
+            />
             <select
               className="input max-w-[160px]"
               value={lg.sourceFilter}
@@ -120,35 +139,26 @@ export function Logs() {
               />
             ))}
           </div>
+        ) : visibleLogs.length === 0 && lg.search.trim() ? (
+          <div className="rounded-md border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
+            <Search size={20} className="mx-auto mb-2 opacity-50" />
+            {t("logs.no_match", { q: lg.search })}
+          </div>
         ) : (
-          <LogTable logs={lg.logs} />
+          <LogTable logs={visibleLogs} />
         )}
       </Section>
 
       {/* 清空二次确认(防止误点导致所有日志瞬间消失) */}
-      {lg.confirmClear && (
-        <Modal
-          open
-          size="sm"
-          title={t("common.confirm")}
-          onClose={() => lg.setConfirmClear(false)}
-          footer={
-            <>
-              <button className="btn-ghost" onClick={() => lg.setConfirmClear(false)}>
-                {t("common.cancel")}
-              </button>
-              <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg"
-                onClick={() => void lg.clear()}
-              >
-                {t("logs.clear")}
-              </button>
-            </>
-          }
-        >
-          <p className="text-sm">{t("logs.clear_confirm")}</p>
-        </Modal>
-      )}
+      <ConfirmModal
+        open={lg.confirmClear}
+        title={t("common.confirm")}
+        confirmLabel={t("logs.clear")}
+        onClose={() => lg.setConfirmClear(false)}
+        onConfirm={async () => { await lg.clear(); }}
+      >
+        <p className="text-sm">{t("logs.clear_confirm")}</p>
+      </ConfirmModal>
     </div>
   );
 }

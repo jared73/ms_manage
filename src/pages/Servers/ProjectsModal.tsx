@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/Modal";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { EmptyHint } from "@/components/Section";
 import { listProjects, upsertProject, deleteProject } from "@/lib/ipc";
 import type { Project } from "@/lib/ipc";
@@ -168,35 +169,22 @@ export function ProjectsModal({
       </Modal>
 
       {/* 删除确认 —— 唯一的二级 modal,防误删 */}
-      {confirmDelete && (
-        <Modal
-          open
-          size="sm"
-          title={t("common.confirm")}
-          onClose={() => { if (!isBusy(confirmDelete.id)) setConfirmDelete(null); }}
-          footer={
-            <>
-              <button
-                className="btn-ghost"
-                onClick={() => setConfirmDelete(null)}
-                disabled={isBusy(confirmDelete.id)}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
-                onClick={() => handleDelete(confirmDelete)}
-                disabled={isBusy(confirmDelete.id)}
-              >
-                {t("common.delete")}
-              </button>
-            </>
-          }
-        >
-          <p className="text-sm">{t("projects.delete_confirm")}</p>
+      <ConfirmModal
+        open={!!confirmDelete}
+        title={t("common.confirm")}
+        confirmLabel={t("common.delete")}
+        busy={!!confirmDelete && isBusy(confirmDelete.id)}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={async () => {
+          if (!confirmDelete) return;
+          await handleDelete(confirmDelete);
+        }}
+      >
+        <p className="text-sm">{t("projects.delete_confirm")}</p>
+        {confirmDelete && (
           <p className="mt-2 break-all font-mono text-xs text-fg-muted">{confirmDelete.name}</p>
-        </Modal>
-      )}
+        )}
+      </ConfirmModal>
     </>
   );
 }

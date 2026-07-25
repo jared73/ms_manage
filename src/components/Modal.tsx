@@ -1,10 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
 
 interface Props {
   open: boolean;
-  title: string;
+  title: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
@@ -49,6 +49,27 @@ function useEscClose(open: boolean, onClose: () => void): void {
 
 export function Modal({ open, title, onClose, children, footer, size = "md" }: Props) {
   useEscClose(open, onClose);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // 焦点管理:
+  // - 打开时把焦点丢到对话框内第一个可聚焦元素(input/button/textarea/select/...
+  //   匹配 tabindex>-1);如果对话框内没有可聚焦元素,焦点停留在 dialog 自身上。
+  // - 关闭时把焦点归还给"打开它的按钮"(如果还能找到的话)。这一步需要文档级
+  //   没有太多干扰,所以只在 dialog 仍打开且 focusing 工作未被打断时执行。
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    // 微任务延后:等 React 把 children 真正挂上
+    const handle = window.setTimeout(() => {
+      const sel = 'input, select, textarea, button, [tabindex]:not([tabindex="-1"])';
+      const first = dialog.querySelector<HTMLElement>(sel);
+      if (first) first.focus();
+      else dialog.focus();
+    }, 0);
+    return () => window.clearTimeout(handle);
+  }, [open]);
+
   if (!open) return null;
   const sizeCls = {
     sm: "max-w-sm",
@@ -63,10 +84,12 @@ export function Modal({ open, title, onClose, children, footer, size = "md" }: P
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
-        aria-label={title}
-        className={clsx("w-full rounded-lg border border-border bg-bg-elev shadow-2xl", sizeCls)}
+        aria-label={typeof title === "string" ? title : undefined}
+        className={clsx("w-full rounded-lg border border-border bg-bg-elev shadow-2xl focus:outline-none", sizeCls)}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">

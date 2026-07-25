@@ -24,6 +24,8 @@ export interface UseLogs {
   logs: LogEntry[];
   level: string;
   sourceFilter: string;
+  /** 自由文本搜索(匹配 message / source) */
+  search: string;
   autoRefresh: boolean;
   /** 当前一次拉取失败的原因(null = OK)。UI 展示"重试"。 */
   loadError: string | null;
@@ -32,6 +34,7 @@ export interface UseLogs {
   sources: string[];
   setLevel: (v: string) => void;
   setSourceFilter: (v: string) => void;
+  setSearch: (v: string) => void;
   setAutoRefresh: (v: boolean) => void;
   /** 手动触发完整 reload,会清除错误状态。常用于 "重试" 按钮。 */
   reload: () => Promise<void>;
@@ -48,6 +51,7 @@ export function useLogs(): UseLogs {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [level, setLevel] = useState<string>("info");
   const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [search, setSearch] = useState<string>("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,12 +121,14 @@ export function useLogs(): UseLogs {
     logs,
     level,
     sourceFilter,
+    search,
     autoRefresh,
     loadError,
     loading,
     sources,
     setLevel,
     setSourceFilter,
+    setSearch,
     setAutoRefresh,
     reload,
     silentReload,

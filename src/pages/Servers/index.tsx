@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import {
   listServers,
   listServerStates,
@@ -433,8 +434,11 @@ export function Servers() {
         {filtered.length === 0 ? (
           <EmptyHint>{t("common.empty")}</EmptyHint>
         ) : (
+          // 横向滚动容器:表格列宽总和 > 容器宽度时 (例如 6 列的工具列会顶起来),
+          // 不允许整页横向滚动只允许表格区域横向滚动 —— 避免侧栏也被推跑。
           <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-bg-subtle text-left text-xs uppercase text-fg-muted">
                 <tr>
                   <th className="px-3 py-2 font-medium">{t("common.name")}</th>
@@ -467,6 +471,7 @@ export function Servers() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </Section>
@@ -503,41 +508,28 @@ export function Servers() {
         />
       )}
 
-      {/* 删除确认 Modal —— 防误删 */}
-      {confirmDelete && (
-        <Modal
-          open
-          size="sm"
-          title={t("common.confirm")}
-          onClose={() => { if (!deletingIds.has(confirmDelete.id)) setConfirmDelete(null); }}
-          footer={
-            <>
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)} disabled={deletingIds.has(confirmDelete.id)}>{t("common.cancel")}</button>
-              <button
-                className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
-                onClick={async () => {
-                  const target = confirmDelete;
-                  if (deletingIds.has(target.id)) return;
-                  setConfirmDelete(null);
-                  await handleDelete(target);
-                }}
-                disabled={deletingIds.has(confirmDelete.id)}
-              >
-                {deletingIds.has(confirmDelete.id) ? (
-                  <Loader2 size={14} className="inline animate-spin mr-1" />
-                ) : null}
-                {t("common.delete")}
-              </button>
-            </>
-          }
-        >
-          <p className="text-sm">{t("servers.delete_confirm")}</p>
+      {/* 删除确认 Modal —— 防误删(用 ConfirmModal 抽取的共享确认组件) */}
+      <ConfirmModal
+        open={!!confirmDelete}
+        title={t("common.confirm")}
+        confirmLabel={t("common.delete")}
+        busy={!!confirmDelete && deletingIds.has(confirmDelete.id)}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={async () => {
+          if (!confirmDelete) return;
+          const target = confirmDelete;
+          setConfirmDelete(null);
+          await handleDelete(target);
+        }}
+      >
+        <p className="text-sm">{t("servers.delete_confirm")}</p>
+        {confirmDelete && (
           <p className="mt-2 break-all font-mono text-xs text-fg-muted">
             {confirmDelete.name}
             {confirmDelete.description ? ` — ${confirmDelete.description}` : ""}
           </p>
-        </Modal>
-      )}
+        )}
+      </ConfirmModal>
 
       {install.confirmOpen && (
         <Modal
