@@ -20,9 +20,15 @@ pub mod logs;
 pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path.parent().context("atomic_write: path has no parent")?;
     std::fs::create_dir_all(parent).context("atomic_write: create parent")?;
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("tmp")
+    // 用 UUID 后缀的 tmp 文件名 —— 多任务同时写同一文件时,tmp 名不会撞。
+    // 之前固定 `.tmp` 时,两个任务 A/B:
+    //   A: write tmp + remove_file(target) + rename(tmp, target)
+    //   B: write tmp(覆盖 A 的 tmp!) + remove_file(target) + rename(tmp, target)
+    // B 的 write 会冲掉 A 的写入,触发数据丢失。现在用 UUID 后缀,A/B 各自独立。
+    let tmp = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("file"),
+        generate_tmp_id()
     ));
     {
         use std::io::Write;
@@ -38,7 +44,22 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(path);
     }
     std::fs::rename(&tmp, path).context("atomic_write: rename")?;
+    // 防御性清理:rename 成功落地后,tmp 文件已被 mv 走,这里再加一道保险也无害。
+    let _ = std::fs::remove_file(&tmp);
     Ok(())
+}
+
+/// 生成 12 字符的 tmp id(UUID-like 简版,够用避免命名冲突)。
+fn generate_tmp_id() -> String {
+    use rand::Rng;
+    let bytes: [u8; 6] = rand::thread_rng().gen();
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(12);
+    for &x in &bytes {
+        s.push(HEX[(x >> 4) as usize] as char);
+        s.push(HEX[(x & 0x0f) as usize] as char);
+    }
+    s
 }
 
 pub fn atomic_write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
@@ -291,6 +312,10 @@ impl Storage {
         // 一次性把老的单 .md skill 迁移到目录制
         skills::migrate_legacy_flat_files(&storage.skills_dir()).ok();
         // 启动时同步一遍 symlink（保证 enabled 状态与文件系统一致）
+        // 同时预热 settings_cache:
+        // - 让冷启动 race(UI get_settings 与 proxy first request 同时命中慢路径各自落盘)
+        //   不再发生 —— 后续读全部命中缓存。
+        // - 失败容错:load_settings() 出错也不影响 Storage 创建,后续调用会自己 retry。
         if let Ok(all) = storage.load_skills() {
             if let Ok(settings) = storage.load_settings() {
                 let _ = skills::reconcile_symlinks(&all, &settings.skill_targets);

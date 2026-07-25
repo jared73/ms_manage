@@ -12,6 +12,7 @@
 
 use crate::proxy::registry;
 use crate::state::AppState;
+use anyhow::Context;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -115,7 +116,18 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
             let k = k.trim().to_lowercase();
             let v = v.trim().to_string();
             if k == "content-length" {
-                content_length = v.parse().unwrap_or(0);
+                // 安全:
+                // - 拒绝非纯 ASCII 数字(防 "1234abc" 之类脏数据被 silent 接受)
+                // - 超过 MAX_BODY_BYTES(16 MB)直接 bail,避免 vec![] 触发 OOM
+                // - 即使攻击者送极小值也走正常逻辑(saturating_to usize 在小值场景无意义)
+                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    anyhow::bail!("invalid Content-Length: {:?}", v);
+                }
+                let n: u64 = v.parse().context("Content-Length parse")?;
+                if n > MAX_BODY_BYTES as u64 {
+                    anyhow::bail!("Content-Length {} exceeds MAX_BODY_BYTES {}", n, MAX_BODY_BYTES);
+                }
+                content_length = n as usize;
             }
             headers.insert(k, v);
         }

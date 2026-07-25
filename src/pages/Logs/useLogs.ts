@@ -12,14 +12,6 @@ import type { LogEntry } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import { toast } from "sonner";
 
-const LEVEL_ORDER = ["debug", "info", "warn", "error"] as const;
-type Level = (typeof LEVEL_ORDER)[number];
-
-function toLevel(s: string): Level {
-  // 未识别值兜底为 "debug"(最低级别,显示所有日志)
-  return (LEVEL_ORDER as readonly string[]).includes(s) ? (s as Level) : "debug";
-}
-
 export interface UseLogs {
   logs: LogEntry[];
   level: string;
@@ -69,9 +61,16 @@ export function useLogs(): UseLogs {
     if (inFlightRef.current) return; // 上一次还没回,丢掉本次
     inFlightRef.current = true;
     try {
-      const r = await listLogs({ limit: 1000, source: sourceFilter || undefined });
-      const min = LEVEL_ORDER.indexOf(toLevel(level));
-      setLogs(r.filter((l) => LEVEL_ORDER.indexOf(toLevel(l.level)) >= min));
+      // 把"最低级别"语义发给后端,后端 list_logs 已支持 level_min 参数做按 rank 过滤。
+      // 这样 5000 条日志 + 用户选 warn → 我们只拉 (warn + error) 大约几十条,
+      // 而不是 5000 条全 JSON 化过线。
+      // level 是空串 (用户选了"全部") 时不传 level_min。
+      const r = await listLogs({
+        limit: 1000,
+        source: sourceFilter || undefined,
+        level_min: level || undefined,
+      });
+      setLogs(r);
       setLoadError(null);
     } catch (e) {
       setLoadError(describeError(e));

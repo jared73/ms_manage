@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import {
   listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir,
   listSkillTargets, toggleSkillTarget, addSkillTarget, removeSkillTarget, updateSkillTarget,
-  importSkillFromPath,
+  importSkillFromPath, parseSkillFrontmatter,
 } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import type { Skill, SkillTarget } from "@/lib/ipc";
@@ -631,20 +631,12 @@ function SkillFormModal({ initial, onClose, onSaved }: {
 
   const submit = async () => {
     try {
-      // 从 frontmatter 提取 name + description
-      const m = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-      const front: Record<string, unknown> = {};
-      if (m) {
-        m[1].split(/\n/).forEach((line) => {
-          const kv = line.match(/^([\w-]+)\s*:\s*(.*)$/);
-          if (kv) {
-            const v = kv[2].trim();
-            front[kv[1]] = v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : v;
-          }
-        });
-      }
-      const name = String(front.name ?? initial.name);
-      const description = String(front.description ?? "");
+      // 调用后端 serde_yaml 解析 frontmatter —— 之前用 JS regex 解析
+      // "Use this: for code review" 这种含 `:` 的 description 会被截断到 "Use this"。
+      const parsed = await parseSkillFrontmatter(content);
+      const front = (parsed.front ?? {}) as Record<string, unknown>;
+      const name = parsed.name ?? initial.name;
+      const description = parsed.description ?? "";
       await upsertSkill({
         ...initial,
         name,

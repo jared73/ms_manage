@@ -35,21 +35,32 @@ pub(crate) fn validate_skill_path(path_str: &str) -> Result<PathBuf, String> {
         return Err(format!("path 不允许 .. 段,收到:{path_str}"));
     }
     // 拒绝 Windows 根目录 / 系统目录
+    // 系统盘硬编码 "C:" 之前能让用户装 D:/Windows 绕过 —— 用 SystemRoot / SystemDrive
+    // 等 env 变量(或 dirs::system_dir())动态发现,跨盘符也安全。
     let lower = path_str.to_lowercase();
-    let denied_prefixes = [
-        r"c:\windows",
-        r"c:\program files\microsoft",
-        r"c:\program files (x86)\microsoft",
-        r"c:\programdata",
-        r"c:\system volume information",
-        "/etc",
-        "/usr",
-        "/var",
-        "/sys",
-        "/proc",
-        "/boot",
+    let mut denied_prefixes: Vec<String> = vec![
+        "/etc".into(), "/usr".into(), "/var".into(),
+        "/sys".into(), "/proc".into(), "/boot".into(),
     ];
-    for p in denied_prefixes {
+    #[cfg(windows)]
+    {
+        // Windows 系统目录来自环境变量,而不是硬编码 C:。
+        // 优先级: SystemRoot > SystemDrive > dirs::system_dir()
+        if let Ok(sw) = std::env::var("SystemRoot") {
+            denied_prefixes.push(sw.to_lowercase());
+        }
+        if let Ok(sd) = std::env::var("SystemDrive") {
+            // SystemDrive 是 "C:" 这种形式,补全一个 ":\windows" 兜底
+            denied_prefixes.push(format!("{}\\windows", sd.to_lowercase()));
+        }
+        denied_prefixes.extend([
+            r"c:\program files\microsoft".to_string(),
+            r"c:\program files (x86)\microsoft".to_string(),
+            r"c:\programdata".to_string(),
+            r"c:\system volume information".to_string(),
+        ]);
+    }
+    for p in &denied_prefixes {
         if lower.starts_with(p) {
             return Err(format!("path 落在系统目录,不允许:{path_str}"));
         }
@@ -115,6 +126,45 @@ pub fn delete_skill(id: String, state: State<'_, Arc<AppState>>) -> Result<(), S
     state.storage.delete_skill(&id).map_err(|e| e.to_string())?;
     let _ = crate::storage::skills::reconcile_after_change(&state.storage);
     Ok(())
+}
+
+/// 解析 SKILL.md 风格的 frontmatter:
+/// - 用 `---` 分隔 YAML + Markdown body
+/// - 完整字段经 serde_yaml 还原成对象,而不是 JS regex 一行行 split
+/// - 返回 `{ front: {key: value}, name, description, body }`
+///
+/// 之前前端用 regex /^([\w-]+)\s*:\s*(.*)$/ 一行行 split 时遇到
+/// `"Use this: for code review"` 这种含 `:` 的 description 会截断,
+/// 或多行 YAML 列表 `- item` 也漏掉 —— YAML 嵌套/多行/特殊字符必须交给 serde_yaml。
+#[tauri::command]
+pub fn parse_skill_frontmatter(content: String) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    let (front_yaml, body) = crate::storage::skills::split_frontmatter(&content);
+    let fm: serde_yaml::Value = serde_yaml::from_str(&front_yaml).unwrap_or(serde_yaml::Value::Null);
+    // 把 serde_yaml::Value 拍平到顶层字符串/数组/布尔/数字,便于前端 JSON 取用。
+    let mut front_out: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    if let serde_yaml::Value::Mapping(map) = fm {
+        for (k, v) in map {
+            let key_str = match k {
+                serde_yaml::Value::String(s) => s,
+                other => format!("{:?}", other),
+            };
+            let json_v = serde_json::to_value(v).unwrap_or(serde_json::Value::Null);
+            front_out.insert(key_str, json_v);
+        }
+    }
+    let name = front_out.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let description = front_out.get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(json!({
+        "front": front_out,
+        "name": name,
+        "description": description,
+        "body": body,
+    }))
 }
 
 #[tauri::command]

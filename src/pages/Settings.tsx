@@ -23,6 +23,9 @@ export function Settings() {
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [regenCode, setRegenCode] = useState("");
   const [regenBusy, setRegenBusy] = useState(false);
+  // 打开 modal 时,把当时 token 的末 4 位冻结到 local state —— 防止用户输入期间
+  // 后端 token 被另一条路径改了(理论上不会,但 modal 期间派生会让占位与校验脱节)。
+  const [regenTokenTail, setRegenTokenTail] = useState("");
   const [saved, setSaved] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
@@ -117,8 +120,8 @@ export function Settings() {
     }
   };
 
-  /** 当前 token 末 4 位,用于确认弹窗的二次校验(防止误点) */
-  const tokenTail = (settings?.mcp_token ?? "").split("***").pop() ?? "";
+  /** 当前 token 末 4 位 —— 不在这里直接派生,而是冻结到 regenTokenTail,
+   * 因为 modal 开期间外部不应让校验逻辑漂移。 */
 
   /** 用户点"复制 token"时,显式问后端要真实 token(不会自动出现在 DOM/store 里)。 */
   const copyToken = async () => {
@@ -303,7 +306,13 @@ export function Settings() {
               )}
               <button
                 className="btn-ghost p-1.5"
-                onClick={() => setConfirmRegen(true)}
+                onClick={() => {
+                  // 打开 modal 时冻结末 4 位,关闭时清空
+                  const tail = (settings?.mcp_token ?? "").split("***").pop() ?? "";
+                  setRegenTokenTail(tail);
+                  setRegenCode("");
+                  setConfirmRegen(true);
+                }}
                 title={t("settings.token_regen_tooltip") as string}
               >
                 <RefreshCw size={14}/>
@@ -319,12 +328,12 @@ export function Settings() {
           open
           size="sm"
           title={t("settings.token_regen_confirm_title")}
-          onClose={() => { if (!regenBusy) { setConfirmRegen(false); setRegenCode(""); } }}
+          onClose={() => { if (!regenBusy) { setConfirmRegen(false); setRegenCode(""); setRegenTokenTail(""); } }}
           footer={
             <>
               <button
                 className="btn-ghost"
-                onClick={() => { setConfirmRegen(false); setRegenCode(""); }}
+                onClick={() => { setConfirmRegen(false); setRegenCode(""); setRegenTokenTail(""); }}
                 disabled={regenBusy}
               >
                 {t("common.cancel")}
@@ -332,8 +341,8 @@ export function Settings() {
               <button
                 className="btn-primary bg-err hover:bg-err/80 text-bg disabled:opacity-60"
                 onClick={regen}
-                disabled={regenBusy || regenCode.trim() !== tokenTail}
-                title={regenCode.trim() !== tokenTail ? t("settings.token_regen_match_required") as string : undefined}
+                disabled={regenBusy || regenCode.trim() !== regenTokenTail}
+                title={regenCode.trim() !== regenTokenTail ? t("settings.token_regen_match_required") as string : undefined}
               >
                 {regenBusy ? <Loader2 size={14} className="inline animate-spin mr-1" /> : null}
                 {t("settings.token_regen_confirm_btn")}
@@ -348,12 +357,12 @@ export function Settings() {
               className="input font-mono"
               value={regenCode}
               onChange={(e) => setRegenCode(e.target.value)}
-              placeholder={tokenTail}
+              placeholder={regenTokenTail}
               autoComplete="off"
               spellCheck={false}
             />
             <div className="mt-1 text-[11px] text-fg-muted">
-              {t("settings.token_regen_input_hint", { tail: tokenTail })}
+              {t("settings.token_regen_input_hint", { tail: regenTokenTail })}
             </div>
           </div>
         </Modal>

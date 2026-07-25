@@ -28,8 +28,11 @@ export function Dashboard() {
 
   // 动态状态：5s 轮询（原来 1.5s 且每次还附带静态项 + 文件系统扫描，太重）。
   // 用 inFlightRef 避免上一次轮询还没回就触发下一次 —— 落后响应会覆盖最新数据。
+  // 用 document.visibilitychange 在标签页隐藏时停掉轮询(IPC + listener 都是真资源),
+  // 回到前台再做一次即时拉取 + 重启 timer。
   const inFlightRef = useRef(false);
   useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
     const load = async () => {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
@@ -51,9 +54,29 @@ export function Dashboard() {
         setInitialLoad(false);
       }
     };
+    const startTimer = () => {
+      if (timer) return;
+      timer = setInterval(() => { void load(); }, 5000);
+    };
+    const stopTimer = () => {
+      if (timer) { clearInterval(timer); timer = null; }
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopTimer();
+      } else {
+        // 回前台立即拉一次 + 启 timer —— 用户打开 dashboard 应该立刻看到最新状态
+        void load();
+        startTimer();
+      }
+    };
     void load();
-    const t = setInterval(() => { void load(); }, 5000);
-    return () => clearInterval(t);
+    startTimer();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      stopTimer();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
 
   const runningCount = servers.filter((s) => s.status === "running").length;

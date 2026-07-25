@@ -159,6 +159,20 @@ export const upsertSkill = (skill: Skill) => invoke<Skill>("upsert_skill", { ski
 export const deleteSkill = (id: string) => invoke<void>("delete_skill", { id });
 export const toggleSkill = (id: string, enabled: boolean) => invoke<void>("toggle_skill", { id, enabled });
 
+/**
+ * 把 SKILL.md 整段交给后端,用 serde_yaml 解析 frontmatter。
+ * 返回 { front: Record<string, unknown>, name, description, body }。
+ * 之前用 JS regex 解析时遇到 "Use this: for code review" 这种含 `:` 的描述会被截断。
+ */
+export interface ParsedFrontmatter {
+  front: Record<string, unknown>;
+  name: string | null;
+  description: string | null;
+  body: string;
+}
+export const parseSkillFrontmatter = (content: string) =>
+  invoke<ParsedFrontmatter>("parse_skill_frontmatter", { content });
+
 // ---- Skill 集成目标（mcp-router 风格：每个编辑器一个目标）----
 export interface SkillTarget {
   id: string;
@@ -213,7 +227,14 @@ export const installMarketItem = (id: string, kind: string, sourceUrl?: string) 
   invoke<void>("install_market_item", { id, kind, sourceUrl });
 
 // ---- Logs ----
-export const listLogs = (opts?: { limit?: number; level?: string; source?: string }) =>
+export const listLogs = (opts?: {
+  limit?: number;
+  /** 精确匹配 - 保留向后兼容。优先使用 level_min。 */
+  level?: string;
+  /** 最低级别:debug=0/info=1/warn=2/error=3。后端会自动包含更高级别。 */
+  level_min?: string;
+  source?: string;
+}) =>
   invoke<LogEntry[]>("list_logs", { opts: opts ?? {} });
 export const clearLogs = () => invoke<void>("clear_logs");
 

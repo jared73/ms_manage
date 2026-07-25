@@ -151,6 +151,7 @@ pub fn run() {
             cmd_skills::upsert_skill,
             cmd_skills::delete_skill,
             cmd_skills::toggle_skill,
+            cmd_skills::parse_skill_frontmatter,
             cmd_skills::list_skill_targets,
             cmd_skills::toggle_skill_target,
             cmd_skills::add_skill_target,

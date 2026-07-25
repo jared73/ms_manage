@@ -335,7 +335,6 @@ pub fn connect(target: Option<String>) {
 /// 旧文件不存在 / 解析失败时备份为 .bak 再写入（不静默丢数据）。
 fn write_json(path: &std::path::Path, value: &serde_json::Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
-
     let mut merged = if path.exists() {
         match std::fs::read_to_string(path) {
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
@@ -500,4 +499,19 @@ pub fn export_mcp(path: String, mode: String) {
         std::process::exit(1);
     }
     println!(". exported to {}", p.display());
+}
+
+/// CLI 通用 helper:写一份 JSON 配置到磁盘,失败时统一格式 eprintln + exit(1)。
+///
+/// 设计:
+/// - 11 处 CLI 子命令都需要"写 mcp config,出错就报错退出"。
+/// - 之前每处都散写 `if let Err(e) = ... { eprintln!(...); std::process::exit(1); }`,
+///   日志风格漂移、错误前缀不一致。
+/// - 有了这个 wrapper,新增 CLI 命令一行调它就够了。
+fn write_config_or_die(path: &std::path::Path, body: &serde_json::Value) {
+    if let Err(e) = write_json(path, body) {
+        eprintln!("write {}: {e}", path.display());
+        std::process::exit(1);
+    }
+    println!(". exported to {}", path.display());
 }

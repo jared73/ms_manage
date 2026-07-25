@@ -100,14 +100,45 @@ pub struct ChildServer {
 
 /// 后台消费子进程 stderr 直至 EOF，避免 pipe 满阻塞子进程。
 /// 行级日志只在 RUST_LOG/MS_MANAGE_DEBUG 下输出。
+///
+/// 安全/性能考虑:
+/// - 截断单行 4 KB —— npm/uv install 失败时经常一行 stack trace 几百 KB,
+///   不截断会塞满 state.storage.logs 5000 容量,挤掉用户的关键日志。
+/// - 检测 binary / 不可打印字符(除 \t)→ 记为 "binary blob, N bytes" 不写原文。
 fn drain_stderr(label: String, stderr: tokio::process::ChildStderr) {
+    const MAX_LINE_BYTES: usize = 4 * 1024;
     tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            if !line.is_empty() {
-                eprintln!("[mcp:{label}!] {line}");
+            if line.is_empty() {
+                continue;
             }
+            // 单行超长截断 + 标注被截掉的字节数
+            let (summary, original_len) = if line.len() > MAX_LINE_BYTES {
+                let cut = line.floor_char_boundary(MAX_LINE_BYTES);
+                // 找出 floor_char_boundary 后的字节数,做到 floor_char_boundary 对 UTF-8 安全
+                let drop = line.len() - cut;
+                (format!("{}…[+{} bytes]", &line[..cut], drop), line.len())
+            } else {
+                (line.clone(), line.len())
+            };
+            // 检测 binary:控制字符(0..=31 除 \t)+ 0x7f 都算不可打印。
+            // 一些 npm 输出的 ANSI 转义常带 \x1b[,但日志染色通常只占头几个字符,
+            // 整体仍可读 —— 所以只有「不可打印字符占比 > 10%」时才当作 binary。
+            let non_printable = summary
+                .bytes()
+                .filter(|b| b < &0x20 && b != &b'\t' || *b == 0x7f)
+                .count();
+            let printable = if original_len == 0 { 1 } else { original_len };
+            if non_printable * 10 > printable {
+                eprintln!(
+                    "[mcp:{label}!] [binary stderr skipped, {} bytes]",
+                    original_len
+                );
+                continue;
+            }
+            eprintln!("[mcp:{label}!] {summary}");
         }
     });
 }
@@ -466,7 +497,9 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
         std::time::Duration::from_secs(10),
         read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
     ).await;
-    let init_ok = matches!(read, Ok(Ok(Some((ref id, _)))) if *id == serde_json::json!(1));
+    // 检查 response id == 1 —— 老的 MCP server 可能把 id 编为字符串 "1" 而不是数字 1。
+    // 用 JSON eq 而非 number 严格比较,兼容两种序列化。
+    let init_ok = matches!(read, Ok(Ok(Some((ref id, _)))) if id == &serde_json::json!(1) || id.as_str() == Some("1"));
     if !init_ok {
         let _ = c.kill().await;
         return Err("initialize 未收到有效响应（可能子进程启动失败或 stdout 输出非 JSON-RPC 内容）".to_string());
@@ -588,22 +621,47 @@ pub async fn run_stdio() -> anyhow::Result<()> {
 ///
 /// 注意：stdio 模式不能从 GUI 启动（GUI 进程 stdin/stdout 被 WebView 占用），
 /// 需用 CLI：`ms_manage.exe proxy stdio`
+///
+/// 并发安全：用 `state.proxy_starting` 做 AtomicBool compare_exchange,
+/// 保证「检查 stats.running + 标记为 starting + spawn bind」三步只被一个调用者
+/// 拿到。败者直接 bail,不触发任何 spawn。
 pub async fn start(_app: &AppHandle, _state: &Arc<crate::state::AppState>) -> anyhow::Result<()> {
     let st = match crate::state::try_current() {
         Some(s) => s,
         None => anyhow::bail!("app state not initialized"),
     };
-    // 已经有 running 的 task？
+    // 先看 running,再用 compare_exchange 抢占 starting 标记。
+    // 两步之间理论上仍可能有一个窗口:两个调用都看到 running=false,
+    // 第一个 compare_exchange 成功,第二个 compare_exchange 失败 bail —— 正是我们要的。
     {
         let stats = st.storage.proxy_stats.read();
         if stats.running {
             anyhow::bail!("代理已经在运行（http://127.0.0.1:{}/mcp）", st.storage.proxy_stats_loaded_port().unwrap_or(0));
         }
     }
+    // compare_exchange:从 false 改为 true。已经是 true(说明另一个并发任务正在启动)
+    // → 直接 bail,避免双 bind。
+    if st.proxy_starting
+        .compare_exchange(false, true, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire)
+        .is_err()
+    {
+        anyhow::bail!("代理正在启动中,请稍候");
+    }
+
+    // 注意:从这之后任何 return 都必须把 proxy_starting reset 回 false,
+    // 否则会卡死到下次重启。
+    let result = start_inner(&st).await;
+    // 无论成功失败,本次启动流程已结束,重置 starting 标记。
+    st.proxy_starting.store(false, std::sync::atomic::Ordering::Release);
+    result
+}
+
+/// 实际启动代理的执行体(单独抽出来便于在 'starting' 互斥内做兜底清理)。
+async fn start_inner(st: &Arc<crate::state::AppState>) -> anyhow::Result<()> {
     let settings = st.storage.load_settings()?;
     let port = settings.proxy_http_port;
     let state = st.clone();
-    // oneshot：run_http bind 成功/失败都会通知，避免“sleep 200ms 后假装已启动”
+    // oneshot：run_http bind 成功/失败都会通知，避免"sleep 200ms 后假装已启动"
     let (tx, rx) = tokio::sync::oneshot::channel::<anyhow::Result<u16>>();
     // 后台 task 跑 HTTP 代理
     tauri::async_runtime::spawn(async move {
@@ -631,7 +689,10 @@ pub async fn start(_app: &AppHandle, _state: &Arc<crate::state::AppState>) -> an
 
 /// 由 Tauri command 调用：根据 server id 在 GUI 内启动单个子 server（不暴露给 Claude Desktop，仅用作调试/单 server 管理）
 pub async fn start_one(srv: &StoredServer) -> anyhow::Result<()> {
-    let _ = spawn_child(srv).await?;
+    // 关键:spawn_child 内部失败时已经 log_event + 写 live_states=Error。
+    // 这里 ? 立刻 return,不要再覆盖 live_states 成 Running。
+    // 否则 GUI 会显示绿色 running 但实际 server 没起来,后续 stop/stop 都对不上 id。
+    spawn_child(srv).await?;
     if let Some(st) = crate::state::try_current() {
         st.storage.live_states.write().insert(srv.id.clone(), ServerStatus::Running.as_str().to_string());
     }

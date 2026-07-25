@@ -121,7 +121,17 @@ export function Servers() {
     return m;
   }, [projects]);
 
-  const needsInstall = (s: McpServer): boolean => s.needs_install === true;
+  const needsInstall = (s: McpServer): boolean => {
+    // 优先用后端字段(列表 refresh 后会带回)。
+    if (s.needs_install === true) return true;
+    if (s.needs_install === false) return false;
+    // 新建 server 后到下次 listServers 之前,后端字段是 undefined。
+    // 本地用命令白名单兜底 —— 避免 UX 信号丢失。
+    const cmd = (s.command ?? "").trim();
+    if (!cmd) return false;
+    const stem = cmd.toLowerCase();
+    return ["npx", "uvx", "pnpx", "bunx"].includes(stem);
+  };
 
   const handleDelete = async (s: McpServer) => {
     if (deletingIds.has(s.id)) return;
@@ -255,33 +265,16 @@ export function Servers() {
     [servers],
   );
 
-  /** 把单个 server 打成 mcpServers JSON,触发复制 + 下载。 */
-  const exportSingleToJson = (s: McpServer) => {
-    const mcpServers: Record<string, any> = {};
-    if (s.transport === "http") {
-      mcpServers[s.name] = { type: "http", url: s.url, headers: s.headers };
-    } else if (s.transport === "sse") {
-      mcpServers[s.name] = { type: "sse", url: s.url, headers: s.headers };
-    } else {
-      mcpServers[s.name] = { command: s.command, args: s.args, env: s.env, cwd: s.cwd };
-    }
-    const json = JSON.stringify({ mcpServers }, null, 2);
-    navigator.clipboard.writeText(json).catch(() => {});
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${s.name}_mcp.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success(t("servers.toast_exported_one", { name: s.name }) as string);
-  };
-
-  /** 导出全部 enabled server。 */
-  const exportToJson = async () => {
-    const enabled = servers.filter((s) => s.enabled);
-    const mcpServers: Record<string, any> = {};
-    for (const s of enabled) {
+  /**
+   * 把一批 server 打成 mcpServers JSON。
+   * - 单一来源:exportSingle 和 exportAll 都调它,避免 11 字段拼装逻辑双份维护
+   *   导致以后改 transport 字段(比如 http 加 auth)漂移。
+   * - http/sse → `type` + `url` + `headers`
+   * - stdio → `command` + `args` + `env` + `cwd`
+   */
+  const buildMcpServersJson = useCallback((items: McpServer[]): string => {
+    const mcpServers: Record<string, unknown> = {};
+    for (const s of items) {
       if (s.transport === "http") {
         mcpServers[s.name] = { type: "http", url: s.url, headers: s.headers };
       } else if (s.transport === "sse") {
@@ -290,20 +283,64 @@ export function Servers() {
         mcpServers[s.name] = { command: s.command, args: s.args, env: s.env, cwd: s.cwd };
       }
     }
-    const json = JSON.stringify({ mcpServers }, null, 2);
+    return JSON.stringify({ mcpServers }, null, 2);
+  }, []);
+
+  /**
+   * 复制并下载一段 JSON。
+   * - clipboard.writeText 失败时(部分 Webview 沙箱)弹 toast 提示用户去下载目录找;
+   *   之前 .catch(() => {}) 静默吞掉,用户以为复制成功实际剪贴板是空的。
+   * - 下载动作不阻塞,失败也至少有一个降级路径(用户能拿到文件)。
+   * - i18n 的 success key 必须带 {{label}},与各家 toaster 兼容。
+   */
+  const copyAndDownload = useCallback(async (
+    json: string,
+    filename: string,
+    label: string,
+    successKey: string,
+  ) => {
+    let clipboardOk = true;
     try {
       await navigator.clipboard.writeText(json);
     } catch {
-      // 同上
+      clipboardOk = false;
+    }
+    if (!clipboardOk) {
+      toast.warning(
+        t("servers.toast_clipboard_failed", { label }) as string,
+        { duration: 4000 },
+      );
+    } else {
+      toast.success(t(successKey, { label }) as string, { duration: 1500 });
     }
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `mcp_servers_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success(t("servers.toast_exported_all", { count: enabled.length }) as string);
+  }, [t]);
+
+  /** 把单个 server 打成 mcpServers JSON,触发复制 + 下载。 */
+  const exportSingleToJson = (s: McpServer) =>
+    void copyAndDownload(
+      buildMcpServersJson([s]),
+      `${s.name}_mcp.json`,
+      s.name,
+      "servers.toast_exported_one",
+    );
+
+  /** 导出全部 enabled server。 */
+  const exportToJson = async () => {
+    const enabled = servers.filter((s) => s.enabled);
+    await copyAndDownload(
+      buildMcpServersJson(enabled),
+      `mcp_servers_${new Date().toISOString().slice(0, 10)}.json`,
+      t("servers.export_all_btn_label", { defaultValue: "全部 enabled servers" }),
+      "servers.toast_exported_all",
+    );
+    // export-all 显式提示一下 count,toast 已经成功时不再重复。
   };
 
   return (

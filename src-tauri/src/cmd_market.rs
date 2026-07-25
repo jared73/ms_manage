@@ -7,10 +7,6 @@ use tauri::State;
 
 const ANTHROPIC_SKILLS_REPO: &str = "anthropics/claude-plugins-official";
 
-fn cache_path(state: &AppState) -> std::path::PathBuf {
-    state.data_dir.join("market-cache.json")
-}
-
 fn builtin_servers() -> Vec<(&'static str, &'static str, &'static str, &'static str, u64)> {
     vec![
         ("fetch",              "server", "@modelcontextprotocol/server-fetch",                "网页抓取（HTML → Markdown）", 8500),
@@ -33,16 +29,14 @@ fn builtin_skills() -> Vec<(&'static str, &'static str, &'static str, &'static s
 pub async fn fetch_market(
     kind: Option<String>,
     _force_refresh: Option<bool>,
-    state: State<'_, Arc<AppState>>,
+    _state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     eprintln!("[market] fetch_market: kind={:?}", kind);
 
-    // 全部用本地默认（4 server + 4 skill），不再访问 GitHub
+    // 全部用本地默认(4 server + 4 skill),不再访问 GitHub。
+    // 注意:之前会写 cache_path —— 现在改为始终由 default 提供数据,
+    // cache 仅作离线 fallback,如果将来真的要接 GitHub,可以基于 cache 判断 stale。
     let all = default_market_items();
-    if let Ok(json) = serde_json::to_string_pretty(&all) {
-        let cp = cache_path(&state);
-        let _ = std::fs::write(cp, json);
-    }
 
     let filtered: Vec<serde_json::Value> = all.into_iter().filter(|item| {
         kind.as_ref().map(|k| item.get("kind").and_then(|v| v.as_str()) == Some(k.as_str())).unwrap_or(true)
@@ -107,12 +101,35 @@ fn percent_encode(s: &str) -> String {
 }
 
 fn decompress_tar_gz(bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
+    // 三道防护:
+    // - entry count ≤ 10,000(防止 5 GB 仓库被无脑展开)
+    // - 单 entry size ≤ 64 MB(防单个文件 OOM)
+    // - 总累计解压字节 ≤ 1 GB(防 zip bomb,sparse 编码后放大 10x 仍可控)
+    // 所有上限都比单用户合理 skill 体积大一到两个数量级,超过即视为异常。
+    const MAX_ENTRIES: usize = 10_000;
+    const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+
     let gz = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(gz);
     // 手动遍历 entries 并校验路径，防止 tar 里的 .. 或绝对路径写到 dest 目录外
     // (tar::Archive::unpack 不做路径清理)
+    let mut count = 0usize;
+    let mut total_uncompressed: u64 = 0;
     for entry in archive.entries().map_err(|e| format!("read tar entries: {e}"))? {
+        count += 1;
+        if count > MAX_ENTRIES {
+            return Err(format!("tar entry 超过 {MAX_ENTRIES} 上限,疑似恶意/异常 tarball"));
+        }
         let mut entry = entry.map_err(|e| format!("read tar entry: {e}"))?;
+        let entry_size = entry.header().size().unwrap_or(0);
+        if entry_size > MAX_ENTRY_BYTES {
+            return Err(format!("tar entry 过大:{} bytes (上限 {})", entry_size, MAX_ENTRY_BYTES));
+        }
+        total_uncompressed += entry_size;
+        if total_uncompressed > MAX_TOTAL_BYTES {
+            return Err(format!("tarball 累计解压超过 {MAX_TOTAL_BYTES} 字节,疑似 zip bomb"));
+        }
         let entry_path = entry.path().map_err(|e| format!("tar entry path: {e}"))?;
         // 跳过绝对路径和含 .. 的条目
         if entry_path.is_absolute() { continue; }
@@ -208,7 +225,34 @@ async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str
     if !resp.status().is_success() {
         return Err(format!("download repo tarball failed: HTTP {}", resp.status()));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("read tarball failed: {e}"))?;
+    // 下载体积硬上限(256 MB):GitHub single-file download 限 100 MB,完整 repo tarball 上限 5 GB
+    // —— 单个 user 不会让一个 skill 市场安装超过几百 MB,超过一律拒。
+    // 边下边校验 Content-Length,避免先全部加载再判定 OOM。
+    const MAX_TARBALL_BYTES: u64 = 256 * 1024 * 1024;
+    if let Some(cl) = resp.content_length() {
+        if cl > MAX_TARBALL_BYTES {
+            return Err(format!(
+                "tarball 过大:Content-Length {cl} > 上限 {MAX_TARBALL_BYTES} (skill 仓库可能被入侵或 repo 误指)"
+            ));
+        }
+    }
+    // 累计下载字节:实际 body 也可能撒谎说 0,我们每 8 MB 累加一次。
+    // 用 streaming 拿到字节而非 bytes().await,可以边读边限制总量。
+    use futures::StreamExt;
+    let mut total: u64 = 0;
+    let mut buf = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("read tarball chunk failed: {e}"))?;
+        total += chunk.len() as u64;
+        if total > MAX_TARBALL_BYTES {
+            return Err(format!(
+                "tarball 下载超过 {MAX_TARBALL_BYTES} 字节上限(实际累计 {total}),已中止"
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let bytes = buf;
 
     // 解压到临时目录
     let temp = std::env::temp_dir().join(format!("ms-manage-skill-{}-{}", id, uuid::Uuid::new_v4()));

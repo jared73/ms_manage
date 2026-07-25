@@ -112,15 +112,22 @@ export function useConnections(): UseConnections {
   }, [settings, revealedToken]);
 
   // HTTP 直连配置 —— 同样默认不填 token,reveal 后填
+  // 用窄类型替代 Record<string, any>:
+  // - 之前 cast 到 any 后,如果后端 mcpServers 是 null/非对象,JSON.stringify 仍合法但
+  //   Claude Desktop 那边 headers 字段缺失,粘过去客户端崩。这里给个明确 null 退出。
   const httpConfig = useMemo(() => {
     if (!routerConfig) return null;
-    const tokenVal = revealedToken ?? "<MS_MANAGE_TOKEN>";
+    const existing = routerConfig.mcpServers;
+    if (typeof existing !== "object" || existing === null || Array.isArray(existing)) {
+      // 后端 schema 错误:不拼接,前端让用户看到那段说明但不输出错误 JSON
+      return null;
+    }
     const obj = {
       mcpServers: {
-        ...(routerConfig.mcpServers as Record<string, any>),
+        ...(existing as Record<string, unknown>),
         "ms-manage": {
-          ...((routerConfig.mcpServers as Record<string, any>)?.["ms-manage"] ?? {}),
-          headers: { Authorization: `Bearer ${tokenVal}` },
+          ...((existing as Record<string, unknown>)["ms-manage"] as Record<string, unknown> | undefined ?? {}),
+          headers: { Authorization: `Bearer ${revealedToken ?? "<MS_MANAGE_TOKEN>"}` },
         },
       },
     };
