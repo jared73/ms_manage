@@ -7,21 +7,39 @@
  */
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, ChevronDown, Terminal, Plug } from "lucide-react";
+import { Copy, ChevronDown, Terminal, Plug, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
 import { useConnections } from "./useConnections";
+import { describeError } from "@/lib/errors";
 
 export function Connections() {
   const { t } = useTranslation();
-  const { routerConfig, proxy, npxConfig, httpConfig, info, revealedToken, revealToken, clearRevealedToken } = useConnections();
+  const {
+    routerConfig, proxy, npxConfig, httpConfig, info,
+    revealedToken, revealToken, clearRevealedToken,
+    loading, loadError, reload,
+  } = useConnections();
   const [copied, setCopied] = useState<string>("");
+  const [revealBusy, setRevealBusy] = useState(false);
 
   const copy = (text: string | null, key: string, label: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text).catch(() => {});
     setCopied(key);
     toast.success(t("connections.copied", { label }), { duration: 1500 });
+  };
+
+  const handleReveal = async () => {
+    if (revealBusy) return;
+    setRevealBusy(true);
+    try {
+      await revealToken();
+    } catch (e) {
+      toast.error(t("connections.reveal_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setRevealBusy(false);
+    }
   };
 
   // 1500ms 后清掉 "已复制" 标记;组件卸载/再次点击时清掉旧 timer,避免对已卸载组件 setState
@@ -38,12 +56,21 @@ export function Connections() {
         action={
           <div className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1.5 text-xs text-fg-muted">
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${
-                  routerConfig?.running ? "bg-ok" : "bg-err"
-                }`}
-              />
-              {routerConfig?.running ? t("connections.running") : t("connections.stopped")}
+              {loading ? (
+                <>
+                  <Loader2 size={11} className="animate-spin" />
+                  {t("connections.loading")}
+                </>
+              ) : (
+                <>
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      routerConfig?.running ? "bg-ok" : "bg-err"
+                    }`}
+                  />
+                  {routerConfig?.running ? t("connections.running") : t("connections.stopped")}
+                </>
+              )}
             </span>
             <button
               className="btn-primary"
@@ -63,6 +90,28 @@ export function Connections() {
           </div>
         }
       >
+        {/* 全页骨架:首屏数据未返回时显示,避免空内容 */}
+        {loading && !loadError && (
+          <div className="space-y-3">
+            <div className="h-4 w-2/3 animate-pulse rounded bg-bg-subtle" />
+            <div className="h-4 w-1/2 animate-pulse rounded bg-bg-subtle" />
+            <div className="h-24 animate-pulse rounded bg-bg-subtle" />
+            <div className="h-32 animate-pulse rounded bg-bg-subtle" />
+          </div>
+        )}
+        {/* 拉取失败:显示错误提示 + 重试按钮 */}
+        {!loading && loadError && (
+          <div className="rounded-md border border-err/40 bg-err/5 p-4 text-sm">
+            <div className="mb-2 font-medium text-err">{t("connections.load_error_title")}</div>
+            <div className="mb-3 text-xs text-fg-muted">{t("connections.load_error_desc")}</div>
+            <button className="btn-primary" onClick={reload}>
+              <RefreshCw size={14} />
+              {t("connections.retry")}
+            </button>
+          </div>
+        )}
+        {/* 拉到数据后才显示内容(loading 期间显示骨架;loadError 显示错误 UI) */}
+        {!loading && (
         <div className="space-y-3 text-sm">
           <p className="text-fg-muted">{t("connections.intro")}</p>
 
@@ -91,8 +140,17 @@ export function Connections() {
                 {t("connections.token_hide")}
               </button>
             ) : (
-              <button className="btn-primary text-xs" onClick={() => void revealToken()}>
-                {t("connections.token_show_btn")}
+              <button
+                className="btn-primary text-xs disabled:opacity-60"
+                onClick={handleReveal}
+                disabled={revealBusy}
+              >
+                {revealBusy ? (
+                  <>
+                    <Loader2 size={11} className="inline animate-spin mr-1" />
+                    {t("connections.revealing")}
+                  </>
+                ) : t("connections.token_show_btn")}
               </button>
             )
           )}
@@ -101,7 +159,7 @@ export function Connections() {
           )}
         </div>
 
-        <details className="rounded-lg border border-border bg-bg-subtle" open>
+        <details className="group rounded-lg border border-border bg-bg-subtle" open>
             <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium hover:bg-overlay-soft">
               <span className="flex items-center gap-2">
                 <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
@@ -126,10 +184,11 @@ export function Connections() {
             </div>
           </details>
         </div>
+        )}
       </Section>
 
       {routerConfig && (
-        <details className="rounded-lg border border-border bg-bg-subtle">
+        <details className="group rounded-lg border border-border bg-bg-subtle">
           <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium hover:bg-overlay-soft">
             <span className="flex items-center gap-2">
               <ChevronDown size={14} className="transition-transform group-open:rotate-180" />

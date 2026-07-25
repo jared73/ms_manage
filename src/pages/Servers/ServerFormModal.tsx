@@ -44,7 +44,7 @@ export function ServerFormModal({
     if (s.transport === "stdio") {
       const cmd = (s.command ?? "").trim();
       if (!cmd) e.command = t("servers.validation_command_required");
-      else if (/^[A-Za-z0-9._\-\/:]+$/.test(cmd) === false) {
+      else if (/^[A-Za-z0-9._\-/:]+$/.test(cmd) === false) {
         // 允许 PATH 解析,所以接受 /: 和 .
         e.command = t("servers.validation_command_charset");
       }

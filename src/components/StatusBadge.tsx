@@ -13,7 +13,7 @@ export function StatusBadge({ status }: { status: ServerStatus }) {
   };
   const m = map[status];
   return (
-    <span className={clsx(m.cls)}>
+    <span className={clsx(m.cls)} role="status">
       <span className={clsx("inline-block h-1.5 w-1.5 rounded-full",
         status === "running"  && "bg-ok",
         status === "starting" && "bg-warn animate-pulse",

@@ -76,7 +76,9 @@
   --bg-subtle: 255 255 255;
   --bg-elev: 241 245 249;
   --fg: 15 23 42;
-  --fg-muted: 100 116 139;
+  /* 对比度提升:100/116/139 → 71/85/105(slate-600),白底上约 6.0:1,
+     满足 WCAG AA 4.5:1 + 大字 AAA 7:1 接近 */
+  --fg-muted: 71 85 105;
   --accent: 124 58 237;
   --accent-hover: 109 40 217;
   --ok: 22 163 74;
@@ -87,7 +89,7 @@
   --overlay-soft: 15 23 42;
   --scrollbar-thumb: #cbd5e1;
   --scrollbar-thumb-hover: #94a3b8;
-  --border-alpha: 0.1;
+  --border-alpha: 0.12;
   --overlay-alpha: 0.4;
   --overlay-soft-alpha: 0.04;
   color-scheme: light;

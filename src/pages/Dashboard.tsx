@@ -152,10 +152,10 @@ export function Dashboard() {
         {servers.length === 0 && skills.length === 0 ? (
           <EmptyHint>
             <div className="space-y-3">
-              <div>{t("dashboard.quick_start.add_server")}</div>
+              <div>{t("dashboard.quick_start.empty_desc")}</div>
               <div className="flex justify-center gap-2">
-                <button className="btn-primary" onClick={() => nav("/servers")}>{t("dashboard.quick_start.add_server")}</button>
-                <button className="btn-ghost" onClick={() => nav("/skills")}>{t("dashboard.quick_start.add_skill")}</button>
+                <button className="btn-primary" onClick={() => nav("/servers")}><Plus size={12}/>{t("dashboard.quick_start.add_server")}</button>
+                <button className="btn-ghost" onClick={() => nav("/skills")}><Sparkles size={12}/>{t("dashboard.quick_start.add_skill")}</button>
                 <button className="btn-ghost" onClick={() => nav("/connections")}>{t("dashboard.action_connect_title")} →</button>
               </div>
             </div>

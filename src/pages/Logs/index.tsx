@@ -4,10 +4,16 @@
  * 设计:
  * - 数据/副作用用 ./useLogs.ts,纯渲染表格用 ./LogTable.tsx
  * - 页面只承担"装订"职责
+ *
+ * 错误/加载状态:
+ * - 首屏拉取未完成 → 显示骨架 + 标题旁的"Loading"标记
+ * - 拉取失败 → 在表格区显示红条 + 重试按钮(loadError)
+ * - 空数据 → 表格显示 "暂无日志" 提示(由 LogTable 渲染)
  */
 import { useTranslation } from "react-i18next";
-import { Trash2, Download } from "lucide-react";
+import { Trash2, Download, AlertTriangle, Loader2 } from "lucide-react";
 import { Section } from "@/components/Section";
+import { Modal } from "@/components/Modal";
 import { useLogs } from "./useLogs";
 import { LogTable } from "./LogTable";
 
@@ -31,6 +37,12 @@ export function Logs() {
         title={t("logs.title")}
         action={
           <div className="flex items-center gap-2">
+            {lg.loading && (
+              <span className="inline-flex items-center gap-1 text-xs text-fg-muted">
+                <Loader2 size={11} className="animate-spin" />
+                {t("logs.loading")}
+              </span>
+            )}
             <select
               className="input max-w-[120px]"
               value={lg.level}
@@ -65,6 +77,7 @@ export function Logs() {
                 checked={lg.autoRefresh}
                 onChange={(e) => lg.setAutoRefresh(e.target.checked)}
                 className="accent-accent"
+                aria-label={t("logs.auto_refresh") as string}
               />
               {t("logs.auto_refresh")}
             </label>
@@ -72,15 +85,70 @@ export function Logs() {
               <Download size={14} />
               {t("logs.export_json")}
             </button>
-            <button className="btn-ghost" onClick={() => void lg.clear()}>
+            <button className="btn-ghost" onClick={() => lg.setConfirmClear(true)}>
               <Trash2 size={14} />
               {t("logs.clear")}
             </button>
           </div>
         }
       >
-        <LogTable logs={lg.logs} />
+        {/* 拉取失败:显示错误条 + 重试按钮 */}
+        {lg.loadError && (
+          <div
+            role="alert"
+            className="mb-3 flex items-start gap-2 rounded-md border border-err/40 bg-err/5 p-3 text-xs"
+          >
+            <AlertTriangle size={14} className="mt-0.5 shrink-0 text-err" />
+            <div className="flex-1">
+              <div className="font-medium text-err">{t("logs.load_error_title")}</div>
+              <div className="mt-0.5 text-fg-muted break-all">{lg.loadError}</div>
+            </div>
+            <button className="btn-primary text-xs" onClick={() => void lg.reload()}>
+              {t("logs.retry")}
+            </button>
+          </div>
+        )}
+
+        {/* 首屏 loading:显示骨架,避免空表 / 闪烁 */}
+        {lg.loading && !lg.loadError && lg.logs.length === 0 ? (
+          <div className="space-y-1.5">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-7 animate-pulse rounded bg-bg-subtle"
+                style={{ width: `${60 + (i * 7) % 35}%` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <LogTable logs={lg.logs} />
+        )}
       </Section>
+
+      {/* 清空二次确认(防止误点导致所有日志瞬间消失) */}
+      {lg.confirmClear && (
+        <Modal
+          open
+          size="sm"
+          title={t("common.confirm")}
+          onClose={() => lg.setConfirmClear(false)}
+          footer={
+            <>
+              <button className="btn-ghost" onClick={() => lg.setConfirmClear(false)}>
+                {t("common.cancel")}
+              </button>
+              <button
+                className="btn-primary bg-err hover:bg-err/80 text-bg"
+                onClick={() => void lg.clear()}
+              >
+                {t("logs.clear")}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm">{t("logs.clear_confirm")}</p>
+        </Modal>
+      )}
     </div>
   );
 }

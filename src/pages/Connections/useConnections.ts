@@ -23,6 +23,12 @@ export interface UseConnections {
   httpConfig: string | null;
   /** 用户点"显示真实 token"后才会拿到的完整 token。否则 null。 */
   revealedToken: string | null;
+  /** 首屏拉取是否完成 —— false 时显示骨架而非空状态 */
+  loading: boolean;
+  /** 首屏拉取中至少有一个 IPC 报错;UI 显示"重试"按钮 */
+  loadError: boolean;
+  /** 触发重新拉所有数据,可用于 IPC 出错时的"重试"按钮 */
+  reload: () => void;
   revealToken: () => Promise<void>;
   clearRevealedToken: () => void;
 }
@@ -33,30 +39,44 @@ export function useConnections(): UseConnections {
   const [routerConfig, setRouterConfig] = useState<RouterConfig | null>(null);
   const [proxy, setProxy] = useState<ProxyStatus | null>(null);
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  // 重试令牌:每次变化都重新触发加载 effect
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
     void (async () => {
-      try {
-        const [s, i, r, p] = await Promise.all([
-          getSettings().catch(() => null),
-          appInfo().catch(() => null),
-          getRouterConfig().catch(() => null),
-          getProxyStatus().catch(() => null),
-        ]);
-        if (cancelled) return;
-        if (s) setSettings(s);
-        if (i) setInfo(i);
-        setRouterConfig(r);
-        setProxy(p);
-      } catch {
-        // 所有 IPC 都失败时静默，页面会显示空状态
-      }
+      // 用 settled 跟踪而不是 try/catch,因为单个 IPC 失败不能让整页崩
+      const settled = await Promise.allSettled([
+        getSettings(),
+        appInfo(),
+        getRouterConfig(),
+        getProxyStatus(),
+      ]);
+      if (cancelled) return;
+      let anyError = false;
+      // settings 失败 → 整页都没法用,标记 loadError;其他失败 → 仅置空,UI 显示 "—"
+      const [s, i, r, p] = settled;
+      if (s.status === "fulfilled") setSettings(s.value);
+      else { anyError = true; setSettings(null); }
+      if (i.status === "fulfilled") setInfo({ data_dir: i.value.data_dir });
+      else { anyError = true; setInfo(null); }
+      if (r.status === "fulfilled") setRouterConfig(r.value);
+      else { anyError = true; setRouterConfig(null); }
+      if (p.status === "fulfilled") setProxy(p.value);
+      else { anyError = true; setProxy(null); }
+      setLoadError(anyError);
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadTick]);
+
+  const reload = useCallback(() => setReloadTick((n) => n + 1), []);
 
   /** 用户显式点击"显示真实 token"按钮后才调用 —— 真实 token 一进 store 就走。 */
   const revealTokenFn = useCallback(async () => {
@@ -64,7 +84,8 @@ export function useConnections(): UseConnections {
       const t = await revealToken();
       setRevealedToken(t);
     } catch {
-      // 静默 —— UI 上会显示"未生成"提示
+      setRevealedToken(null);
+      // 不 rethrow —— 调用方如果关心可以轮询 revealedToken === null + 长时间如此 → 报错
     }
   }, []);
 
@@ -114,6 +135,9 @@ export function useConnections(): UseConnections {
     npxConfig,
     httpConfig,
     revealedToken,
+    loading,
+    loadError,
+    reload,
     revealToken: revealTokenFn,
     clearRevealedToken,
   };
