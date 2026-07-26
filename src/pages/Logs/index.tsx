@@ -47,35 +47,35 @@ export function Logs() {
       <Section
         title={t("logs.title")}
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {lg.loading && (
               <span className="inline-flex items-center gap-1 text-xs text-fg-muted">
-                <Loader2 size={11} className="animate-spin" />
+                <Loader2 size={12} className="animate-spin" />
                 {t("logs.loading")}
               </span>
             )}
             <select
-              className="input max-w-[120px]"
+              className="input w-auto"
               value={lg.level}
               onChange={(e) => lg.setLevel(e.target.value)}
               title={t("logs.filter_level_tooltip") as string}
             >
               <option value="">{t("logs.level_all")}</option>
-              <option value="debug">debug</option>
-              <option value="info">info</option>
-              <option value="warn">warn</option>
-              <option value="error">error</option>
+              <option value="debug">{t("logs.level_debug")}</option>
+              <option value="info">{t("logs.level_info")}</option>
+              <option value="warn">{t("logs.level_warn")}</option>
+              <option value="error">{t("logs.level_error")}</option>
             </select>
             <input
               type="search"
-              className="input max-w-[180px]"
+              className="input flex-1 min-w-[140px] max-w-[260px]"
               placeholder={t("logs.search_placeholder") as string}
               value={lg.search}
               onChange={(e) => lg.setSearch(e.target.value)}
               aria-label={t("logs.search_label") as string}
             />
             <select
-              className="input max-w-[160px]"
+              className="input w-auto"
               value={lg.sourceFilter}
               onChange={(e) => lg.setSourceFilter(e.target.value)}
               title={t("logs.filter_source_tooltip") as string}
@@ -88,7 +88,7 @@ export function Logs() {
               ))}
             </select>
             <label
-              className="flex cursor-pointer items-center gap-1.5 text-xs text-fg-muted"
+              className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-fg-muted"
               title={t("logs.auto_refresh_tooltip") as string}
             >
               <input
@@ -100,11 +100,11 @@ export function Logs() {
               />
               {t("logs.auto_refresh")}
             </label>
-            <button className="btn-ghost" onClick={exportJson} disabled={lg.logs.length === 0}>
+            <button className="btn-ghost shrink-0" onClick={exportJson} disabled={lg.logs.length === 0}>
               <Download size={14} />
               {t("logs.export_json")}
             </button>
-            <button className="btn-ghost" onClick={() => lg.setConfirmClear(true)}>
+            <button className="btn-ghost shrink-0" onClick={() => lg.setConfirmClear(true)}>
               <Trash2 size={14} />
               {t("logs.clear")}
             </button>
@@ -141,7 +141,7 @@ export function Logs() {
           </div>
         ) : visibleLogs.length === 0 && lg.search.trim() ? (
           <div className="rounded-md border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
-            <Search size={20} className="mx-auto mb-2 opacity-50" />
+            <Search size={18} className="mx-auto mb-2 opacity-50" />
             {t("logs.no_match", { q: lg.search })}
           </div>
         ) : (

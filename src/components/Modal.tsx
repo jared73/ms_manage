@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -47,7 +48,22 @@ function useEscClose(open: boolean, onClose: () => void): void {
   }, [open, onClose]);
 }
 
+/**
+ * Modal 焦点循环:WCAG 2.4.3 要求 Tab 键在 dialog 内循环,不能跑到背景页面。
+ *
+ * 实现:监听 dialog 内 keydown(Tab/Shift+Tab):
+ * - 找到 dialog 内第一个和最后一个可聚焦元素
+ * - Shift+Tab 在第一个时 → 跳到最后一个
+ * - Tab 在最后一个时 → 跳到第一个
+ * - 其他情况不动(浏览器原生行为处理)
+ *
+ * 注意:不仅 dialog 内元素要循环,dialog 本身(tabIndex=-1)也算一个,
+ * 因为有时焦点可能落在 dialog 容器上(无 children 时)。
+ */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ open, title, onClose, children, footer, size = "md" }: Props) {
+  const { t } = useTranslation();
   useEscClose(open, onClose);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +84,42 @@ export function Modal({ open, title, onClose, children, footer, size = "md" }: P
       else dialog.focus();
     }, 0);
     return () => window.clearTimeout(handle);
+  }, [open]);
+
+  // Focus trap:在 dialog 内拦截 Tab/Shift+Tab,首尾循环
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>(FOCUSABLE),
+      ).filter((el) => !el.hasAttribute("disabled") && el.tabIndex !== -1);
+      const active = document.activeElement as HTMLElement | null;
+      // 先区分焦点是否在 dialog 外,不要把不可聚焦的 dialog 容器混入真实边界。
+      // 只有没有任何可聚焦子元素时,dialog 才作为唯一 fallback。
+      if (focusables.length === 0) {
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (!dialog.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    // capture 阶段,确保在 React 自己处理 keydown 前拦住
+    dialog.addEventListener("keydown", handler, true);
+    return () => dialog.removeEventListener("keydown", handler, true);
   }, [open]);
 
   if (!open) return null;
@@ -94,7 +146,7 @@ export function Modal({ open, title, onClose, children, footer, size = "md" }: P
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-base font-semibold">{title}</h2>
-          <button className="btn-ghost p-1" onClick={onClose} aria-label="Close">
+          <button className="btn-ghost p-1" onClick={onClose} aria-label={t("common.close")}>
             <X size={16} />
           </button>
         </div>

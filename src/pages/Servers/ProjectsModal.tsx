@@ -53,7 +53,7 @@ export function ProjectsModal({
       setCreating(false);
       await load();
       await onChanged();
-      toast.success(t("projects.saved", { defaultValue: "项目已保存" }) as string, { duration: 1500 });
+      toast.success(t("projects.saved") as string, { duration: 1500 });
     } catch (e) {
       toast.error(t("projects.save_failed", { msg: describeError(e) }) as string);
     } finally {
@@ -105,7 +105,7 @@ export function ProjectsModal({
         <div className="space-y-3">
           {/* 内联编辑表单 —— 避免嵌套 modal */}
           {(editing || creating) && (
-            <div className="rounded-md border border-accent/40 bg-accent/5 p-3">
+            <div className="surface-accent-soft rounded-md p-3">
               <ProjectForm
                 key={editing?.id ?? "__new__"}
                 initial={editing ?? blank()}

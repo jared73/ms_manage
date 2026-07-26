@@ -32,7 +32,7 @@ export function Field({
       <div className="mb-1 text-xs text-fg-muted">{label}</div>
       <div className={error ? "field-invalid" : ""}>{children}</div>
       {error && (
-        <div className="mt-1 text-[11px] text-err" role="alert">
+        <div className="mt-1 text-2xs text-err" role="alert">
           {error}
         </div>
       )}

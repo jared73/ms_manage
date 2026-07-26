@@ -17,7 +17,8 @@ const LEVEL_BADGE: Record<string, string> = {
 export const LogTable = React.memo(function LogTable({ logs }: { logs: LogEntry[] }) {
   const { t } = useTranslation();
   return (
-    <div className="overflow-hidden rounded-lg border border-border">
+    <div className="overflow-x-auto">
+      <div className="overflow-hidden rounded-lg border border-border">
       <div className="max-h-[75vh] overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-bg-subtle text-left text-xs uppercase text-fg-muted">
@@ -42,6 +43,7 @@ export const LogTable = React.memo(function LogTable({ logs }: { logs: LogEntry[
           </tbody>
         </table>
       </div>
+      </div>
     </div>
   );
 });
@@ -49,17 +51,17 @@ export const LogTable = React.memo(function LogTable({ logs }: { logs: LogEntry[
 const LogRow = React.memo(function LogRow({ log: l }: { log: LogEntry }) {
   return (
     <tr className="border-t border-border hover:bg-overlay-soft">
-      <td className="px-3 py-1.5 font-mono text-[11px] text-fg-muted whitespace-nowrap">
+      <td className="px-3 py-1.5 font-mono text-2xs text-fg-muted whitespace-nowrap">
         {l.timestamp.slice(11, 19)}
       </td>
       <td className="px-3 py-1.5">
         <span className={LEVEL_BADGE[l.level] ?? "badge-mute"}>{l.level}</span>
       </td>
-      <td className="px-3 py-1.5 font-mono text-xs">{l.source}</td>
+      <td className="max-w-[10rem] truncate px-3 py-1.5 font-mono text-xs">{l.source}</td>
       <td className="px-3 py-1.5">
         <div>{l.message}</div>
         {l.detail && (
-          <pre className="mt-1 text-[11px] text-fg-muted whitespace-pre-wrap">{l.detail}</pre>
+          <pre className="mt-1 text-2xs text-fg-muted whitespace-pre-wrap">{l.detail}</pre>
         )}
       </td>
     </tr>

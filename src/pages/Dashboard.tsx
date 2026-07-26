@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Server, Sparkles, Activity, Wrench, ChevronDown, ChevronRight, Plug, Plus, ArrowRight } from "lucide-react";
@@ -8,6 +8,7 @@ import {
   listServerStates, listSkills, appInfo,
 } from "@/lib/ipc";
 import type { ServerState, Skill } from "@/lib/ipc";
+import { describeError } from "@/lib/errors";
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -20,6 +21,9 @@ export function Dashboard() {
   const [toolsOpen, setToolsOpen] = useState(false);
   // 初始加载标识：首屏未拉到数据时显示骨架，避免闪烁 0 值
   const [initialLoad, setInitialLoad] = useState(true);
+  // 任一 IPC 失败时显示错误条 + 重试按钮 —— 之前 4 个 `.catch(() => null)` 把错误全吞了,
+  // 用户看到的就是永远 "0" / "未运行",无法判断是后端坏了还是前端没拿到数据。
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 静态值（版本号）只取一次
   useEffect(() => {
@@ -31,29 +35,40 @@ export function Dashboard() {
   // 用 document.visibilitychange 在标签页隐藏时停掉轮询(IPC + listener 都是真资源),
   // 回到前台再做一次即时拉取 + 重启 timer。
   const inFlightRef = useRef(false);
+  // load 提到 useEffect 外,这样错误条上的「重试」按钮能直接调用它。
+  // 每次 IPC 失败时显示具体错原因 + 给用户立即重试的机会,而不是只能等到下一次 5s 轮询。
+  const load = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      // 用 Promise.allSettled 而不是 Promise.all + .catch(()=>null):
+      // 这样能区分「后端确实返回了空数组」和「IPC 抛了错」——
+      // 空数组不显示错误条,但 IPC 失败必须显示并允许重试。
+      const [pr, sr, skr, , etr] = await Promise.allSettled([
+        getProxyStatus(),
+        listServerStates(),
+        listSkills(),
+        // getToolsTotal 因为 dashboard 不显示总数,跳过这只 IPC(0 extra round trip)
+        Promise.resolve(0) as Promise<number>,
+        getExposedTools(),
+      ]);
+      const firstErr = [pr, sr, skr, etr].find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+      if (firstErr) {
+        setLoadError(describeError(firstErr.reason));
+      } else {
+        setLoadError(null);
+      }
+      setProxy(pr.status === "fulfilled" ? pr.value : null);
+      setServers(sr.status === "fulfilled" ? sr.value : []);
+      setSkills(skr.status === "fulfilled" ? skr.value : []);
+      setExposedTools(etr.status === "fulfilled" && Array.isArray(etr.value) ? etr.value : []);
+    } finally {
+      inFlightRef.current = false;
+      setInitialLoad(false);
+    }
+  }, []);
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
-    const load = async () => {
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
-      try {
-        const [p, ss, sk, , et] = await Promise.all([
-          getProxyStatus().catch(() => null),
-          listServerStates().catch(() => []),
-          listSkills().catch(() => []),
-          // getToolsTotal 因为 dashboard 不显示总数,跳过这只 IPC(0 extra round trip)
-          Promise.resolve(0) as Promise<number>,
-          getExposedTools().catch(() => []),
-        ]);
-        setProxy(p);
-        setServers(ss);
-        setSkills(sk);
-        setExposedTools(Array.isArray(et) ? et : []);
-      } finally {
-        inFlightRef.current = false;
-        setInitialLoad(false);
-      }
-    };
     const startTimer = () => {
       if (timer) return;
       timer = setInterval(() => { void load(); }, 5000);
@@ -77,7 +92,7 @@ export function Dashboard() {
       stopTimer();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, []);
+  }, [load]);
 
   const runningCount = servers.filter((s) => s.status === "running").length;
   const enabledSkills = skills.filter((s) => s.enabled).length;
@@ -115,6 +130,18 @@ export function Dashboard() {
         </div>
       </div>
 
+      {/* 加载失败提示:任一 IPC 抛错时显示,给用户「具体错什么 + 重试按钮」而不是冷冰冰的 0 */}
+      {loadError && (
+        <div className="card border-err/40 bg-err/5 p-3 text-sm flex items-center justify-between">
+          <span className="text-err">
+            {t("dashboard.load_error")}: {loadError}
+          </span>
+          <button className="btn-ghost" onClick={() => { void load(); }}>
+            {t("dashboard.retry")}
+          </button>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard icon={<Server size={16} />} label={t("dashboard.stats.servers_total")} value={dash(servers.length)} bar="bg-fg-muted" />
@@ -134,30 +161,30 @@ export function Dashboard() {
               {toolsOpen ? <ChevronDown size={14} className="text-fg-muted" /> : <ChevronRight size={14} className="text-fg-muted" />}
               <Wrench size={16} className="text-accent" />
               <span className="text-sm font-semibold">{t("dashboard.exposed_tools")}</span>
-              <span className="badge-mute text-[10px]">
+              <span className="badge-mute text-3xs">
                 {t("dashboard.exposed_tools_total", { total: exposedTools.length + totalDisabled })}
               </span>
               {totalDisabled > 0 ? (
-                <span className="badge-mute text-[10px]">
+                <span className="badge-mute text-3xs">
                   {t("dashboard.exposed_tools_breakdown", {
                     enabled: exposedTools.length,
                     disabled: totalDisabled,
                   })}
                 </span>
               ) : (
-                <span className="badge-mute text-[10px]">
+                <span className="badge-mute text-3xs">
                   {t("dashboard.exposed_tools_count", { count: exposedTools.length })}
                 </span>
               )}
             </div>
-            <span className="text-[11px] text-fg-muted">{t("dashboard.exposed_tools_hint")}</span>
+            <span className="text-2xs text-fg-muted">{t("dashboard.exposed_tools_hint")}</span>
           </button>
           {toolsOpen && (
             <div className="max-h-72 space-y-1 overflow-auto">
               {exposedTools.map((t) => (
                 <div key={t.name} className="rounded-md border border-border bg-bg-subtle/60 px-3 py-2">
                   <div className="flex items-center gap-2 text-xs">
-                    <span className="badge-accent shrink-0 text-[10px]">{t.__server}</span>
+                    <span className="badge-accent shrink-0 text-3xs">{t.__server}</span>
                     <code className="font-mono text-fg">{t.name}</code>
                   </div>
                   {t.description && (
@@ -224,7 +251,7 @@ function ActionCard({ icon, title, desc, onClick }: { icon: React.ReactNode; tit
   return (
     <button
       onClick={onClick}
-      className="group flex items-center gap-3 rounded-lg border border-border bg-bg-subtle p-4 text-left transition-all hover:border-accent/50 hover:bg-bg-elev"
+      className="group flex items-center gap-3 rounded-lg border border-border bg-bg-subtle p-4 text-left transition-colors hover:border-accent/50 hover:bg-bg-elev"
     >
       <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-accent/15 text-accent transition-colors group-hover:bg-accent group-hover:text-white">
         {icon}

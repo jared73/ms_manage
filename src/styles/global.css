@@ -2,8 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ===== 4 套主题：每套 14 个 CSS 变量 =====
-   颜色用 "R G B" 三元组形式，便于 Tailwind 透明度修饰符 /15、/25 等 */
+/* ===== 4 套主题：每套 ~18 个语义变量 + 5 个 alpha 变量 + 2 个滚动条变量 =====
+   颜色用 "R G B" 三元组形式，便于 Tailwind 透明度修饰符 /15、/25 等
+
+   语义变量（共 18 个）：
+     --bg, --bg-subtle, --bg-elev, --fg, --fg-muted,
+     --accent, --accent-hover, --fg-on-accent, --surface-muted,
+     --ok, --warn, --err,
+     --border, --overlay, --overlay-soft
+     (含 scrollbar-thumb / scrollbar-thumb-hover 两个滚动条槽位)
+
+   Alpha 变量（共 5 个，用途不同分别命名）：
+     --border-alpha, --overlay-alpha, --overlay-soft-alpha
+     （border / overlay 默认带主题相关 alpha；overlay-soft 单独控制） */
+
 :root,
 [data-theme="purple"] {
   --bg: 15 17 21;
@@ -13,6 +25,10 @@
   --fg-muted: 154 160 176;
   --accent: 124 92 255;
   --accent-hover: 106 76 240;
+  --fg-on-accent: 255 255 255;
+  /* --surface-muted：介于 --bg-subtle 与 --bg-elev 之间的中性填充层，
+     用于「次级容器 / 分组块」背景（不是卡片，是更低层次的分组槽） */
+  --surface-muted: 51 65 85;
   --ok: 34 197 94;
   --warn: 245 158 11;
   --err: 239 68 68;
@@ -35,6 +51,8 @@
   --fg-muted: 147 197 253;
   --accent: 56 189 248;
   --accent-hover: 14 165 233;
+  --fg-on-accent: 255 255 255;
+  --surface-muted: 30 58 95;
   --ok: 34 197 94;
   --warn: 245 158 11;
   --err: 239 68 68;
@@ -57,6 +75,8 @@
   --fg-muted: 134 239 172;
   --accent: 52 211 153;
   --accent-hover: 16 185 129;
+  --fg-on-accent: 255 255 255;
+  --surface-muted: 28 53 38;
   --ok: 34 197 94;
   --warn: 245 158 11;
   --err: 239 68 68;
@@ -81,6 +101,8 @@
   --fg-muted: 71 85 105;
   --accent: 124 58 237;
   --accent-hover: 109 40 217;
+  --fg-on-accent: 255 255 255;
+  --surface-muted: 203 213 225;
   --ok: 22 163 74;
   --warn: 217 119 6;
   --err: 220 38 38;
@@ -103,7 +125,17 @@
 }
 
 html, body, #root { height: 100%; }
-body { margin: 0; background: rgb(var(--bg)); color: rgb(var(--fg)); }
+
+@layer base {
+  body {
+    margin: 0;
+    background: rgb(var(--bg));
+    color: rgb(var(--fg));
+    transition-property: background-color, border-color, color;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
 
 /* 滚动条样式 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -153,4 +185,12 @@ body { margin: 0; background: rgb(var(--bg)); color: rgb(var(--fg)); }
   .badge-err  { @apply badge bg-err/15 text-err; }
   .badge-mute { @apply badge bg-overlay-soft text-fg-muted; }
   .badge-accent { @apply badge bg-accent/15 text-accent; }
+
+  .surface-muted { @apply bg-surface-muted/30 dark:bg-surface-muted/30; }
+  /* 组合工具类：accent 主题色软背景，border + bg 双语义合一 */
+  .surface-accent-soft { @apply border border-accent/40 bg-accent/10; }
+  .icon-xs { @apply h-3 w-3; }
+  .icon-sm { @apply h-3.5 w-3.5; }
+  .icon-md { @apply h-4 w-4; }
+  .icon-lg { @apply h-6 w-6; }
 }

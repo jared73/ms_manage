@@ -20,6 +20,8 @@ export default {
         ok: "rgb(var(--ok) / <alpha-value>)",
         warn: "rgb(var(--warn) / <alpha-value>)",
         err: "rgb(var(--err) / <alpha-value>)",
+        onAccent: "rgb(var(--fg-on-accent) / <alpha-value>)",
+        surfaceMuted: "rgb(var(--surface-muted) / <alpha-value>)",
         // border 与 overlay 默认带主题相关 alpha
         border: "rgb(var(--border) / var(--border-alpha))",
         overlay: {
@@ -30,6 +32,18 @@ export default {
       fontFamily: {
         sans: ["system-ui", "Microsoft YaHei", "Segoe UI", "sans-serif"],
         mono: ["JetBrains Mono", "Consolas", "monospace"],
+      },
+      fontSize: {
+        "2xs": "0.6875rem",
+        "3xs": "0.625rem",
+      },
+      transitionDuration: {
+        DEFAULT: "150ms",
+        fast: "100ms",
+        slow: "300ms",
+      },
+      transitionTimingFunction: {
+        DEFAULT: "cubic-bezier(0.4, 0, 0.2, 1)",
       },
     },
   },

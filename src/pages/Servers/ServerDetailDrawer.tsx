@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { X, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { fetchServerTools, setToolEnabled } from "@/lib/ipc";
 import type { McpServer, McpTool } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
+import { Toggle } from "@/components/Toggle";
+import { Modal } from "@/components/Modal";
 
 const TOOLS_CACHE_TTL_MS = 30_000;
 
@@ -80,44 +82,31 @@ export function ServerDetailDrawer({
   }, [tab]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-overlay backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-2xl rounded-lg border border-border bg-bg-elev shadow-2xl max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="text-base font-semibold">{server.name}</h2>
-            {server.description && <div className="text-xs text-fg-muted">{server.description}</div>}
-          </div>
-          <button className="btn-ghost p-1" onClick={onClose}>
-            <X size={16} />
-          </button>
-        </div>
+    <Modal open size="lg" title={server.name} onClose={onClose}>
+      {server.description && (
+        <div className="-mt-2 mb-3 text-xs text-fg-muted">{server.description}</div>
+      )}
 
-        {/* tabs */}
-        <div className="flex border-b border-border px-2">
-          <button
-            className={`px-3 py-2 text-sm ${tab === "general" ? "border-b-2 border-accent text-fg" : "text-fg-muted hover:text-fg"}`}
-            onClick={() => setTab("general")}
-          >
-            {t("servers.detail_general_tab")}
-          </button>
-          <button
-            className={`px-3 py-2 text-sm ${tab === "tools" ? "border-b-2 border-accent text-fg" : "text-fg-muted hover:text-fg"}`}
-            onClick={() => setTab("tools")}
-          >
-            {t("servers.detail_tools_tab")}
-            {localDisabled.size > 0 && (
-              <span className="ml-1 badge-mute text-[10px]">{localDisabled.size} {t("common.disabled")}</span>
-            )}
-          </button>
-        </div>
+      {/* tabs */}
+      <div className="-mx-4 mb-3 flex border-b border-border px-2">
+        <button
+          className={`px-3 py-2 text-sm ${tab === "general" ? "border-b-2 border-accent text-fg" : "text-fg-muted hover:text-fg"}`}
+          onClick={() => setTab("general")}
+        >
+          {t("servers.detail_general_tab")}
+        </button>
+        <button
+          className={`px-3 py-2 text-sm ${tab === "tools" ? "border-b-2 border-accent text-fg" : "text-fg-muted hover:text-fg"}`}
+          onClick={() => setTab("tools")}
+        >
+          {t("servers.detail_tools_tab")}
+          {localDisabled.size > 0 && (
+            <span className="ml-1 badge-mute text-3xs">{localDisabled.size} {t("common.disabled")}</span>
+          )}
+        </button>
+      </div>
 
-        <div className="flex-1 overflow-auto p-4">
+      <div className="space-y-3 text-sm">
           {tab === "general" && (
             <div className="space-y-3 text-sm">
               <DetailRow k={t("servers.detail_transport")} v={<span className="badge-mute">{server.transport}</span>} />
@@ -219,18 +208,12 @@ export function ServerDetailDrawer({
                       key={tool.name}
                       className={`flex items-start gap-2 rounded-md border px-3 py-2 ${enabled ? "border-border bg-bg-subtle" : "border-border bg-bg-subtle/40 opacity-60"}`}
                     >
-                      <button
-                        onClick={() => toggleTool(tool.name, !enabled)}
-                        role="switch"
-                        aria-checked={enabled}
-                        aria-label={`${tool.name} ${enabled ? t("common.enabled") : t("common.disabled")}`}
-                        className={`relative mt-1 h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${enabled ? "bg-accent" : "bg-overlay-soft"}`}
-                        title={enabled ? t("common.enabled") : t("common.disabled")}
-                      >
-                        <span
-                          className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${enabled ? "left-4" : "left-0.5"}`}
-                        />
-                      </button>
+                      <Toggle
+                        checked={enabled}
+                        onChange={(next) => toggleTool(tool.name, next)}
+                        label={`${tool.name} ${enabled ? t("common.enabled") : t("common.disabled")}`}
+                        className="mt-1"
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium">{tool.name}</div>
                         {tool.description && (
@@ -244,8 +227,7 @@ export function ServerDetailDrawer({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

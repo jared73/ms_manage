@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Copy, ChevronDown, Terminal, Plug, RefreshCw, Loader2 } from "lucide-react";
+import { Copy, Check, ChevronDown, Terminal, Plug, RefreshCw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
 import { useConnections } from "./useConnections";
@@ -68,7 +68,7 @@ export function Connections() {
             <span className="inline-flex items-center gap-1.5 text-xs text-fg-muted">
               {loading ? (
                 <>
-                  <Loader2 size={11} className="animate-spin" />
+                  <Loader2 size={12} className="animate-spin" />
                   {t("connections.loading")}
                 </>
               ) : (
@@ -78,7 +78,7 @@ export function Connections() {
                       routerConfig?.running ? "bg-ok" : "bg-err"
                     }`}
                   />
-                  {routerConfig?.running ? t("connections.running") : t("connections.stopped")}
+                  {routerConfig?.running ? t("connections.proxy_running") : t("connections.proxy_stopped")}
                 </>
               )}
             </span>
@@ -89,7 +89,7 @@ export function Connections() {
               title={t("connections.copy_tooltip") as string}
             >
               {copied === "npx" ? (
-                <span>✓ {t("common.copied")}</span>
+                <span><Check size={12} aria-hidden="true" /> {t("common.copied")}</span>
               ) : (
                 <>
                   <Copy size={14} />
@@ -157,7 +157,7 @@ export function Connections() {
               >
                 {revealBusy ? (
                   <>
-                    <Loader2 size={11} className="inline animate-spin mr-1" />
+                    <Loader2 size={12} className="inline animate-spin mr-1" />
                     {t("connections.revealing")}
                   </>
                 ) : t("connections.token_show_btn")}
@@ -177,18 +177,18 @@ export function Connections() {
                 {t("connections.npx_card_title")}
               </span>
               <button
-                className="btn-ghost px-2 py-0.5 text-[11px]"
+                className="btn-ghost px-2 py-0.5 text-2xs"
                 onClick={(e) => {
                   e.preventDefault();
                   if (npxConfig) void copy(npxConfig, "npx", t("connections.npx_card_title"));
                 }}
                 disabled={!npxConfig}
               >
-                {copied === "npx" ? <span>✓ {t("common.copied")}</span> : <><Copy size={10} />{t("common.copy")}</>}
+                {copied === "npx" ? <span><Check size={12} aria-hidden="true" /> {t("common.copied")}</span> : <><Copy size={12} />{t("common.copy")}</>}
               </button>
             </summary>
             <div className="border-t border-border p-4">
-              <pre className="max-h-48 overflow-auto rounded bg-bg p-3 text-[11px] leading-relaxed">
+              <pre className="max-h-48 overflow-auto rounded bg-bg p-3 text-2xs leading-relaxed">
                 {npxConfig ?? t("connections.waiting_settings")}
               </pre>
             </div>
@@ -215,14 +215,21 @@ export function Connections() {
               <div>
                 <span className="text-fg-muted">{t("connections.token_label")}</span>
                 <code className="text-fg break-all">
-                  {revealedToken ?? routerConfig.token ?? "(未生成)"}
+                  {revealedToken ?? routerConfig.token ?? t("settings.token_not_generated")}
                 </code>
                 {revealedToken && (
                   <button
-                    className="btn-ghost ml-2 px-2 py-0.5 text-[11px]"
+                    className="btn-ghost ml-2 px-2 py-0.5 text-2xs"
                     onClick={() => copy(revealedToken, "token", "token")}
                   >
-                    {copied === "token" ? "✓" : <Copy size={10} />}
+                    {copied === "token" ? (
+                      <span aria-live="polite">{t("common.copied")}</span>
+                    ) : (
+                      <>
+                        <Copy size={12} />
+                        {t("common.copy")}
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -241,32 +248,32 @@ export function Connections() {
             </div>
 
             <div>
-              <div className="mb-1 flex items-center justify-between text-[11px] text-fg-muted">
+              <div className="mb-1 flex items-center justify-between text-2xs text-fg-muted">
                 <span className="flex items-center gap-1">
-                  <Plug size={11} />
+                  <Plug size={12} />
                   {t("connections.http_card_title")}
                 </span>
                 <button
-                  className="btn-ghost px-2 py-0.5 text-[11px]"
+                  className="btn-ghost px-2 py-0.5 text-2xs"
                   onClick={() => {
                     httpConfig && void copy(httpConfig, "http", t("connections.http_card_title"));
                   }}
                 >
                   {copied === "http" ? (
-                    <span>✓ {t("common.copied")}</span>
+                    <span><Check size={12} aria-hidden="true" /> {t("common.copied")}</span>
                   ) : (
                     <>
-                      <Copy size={10} />
+                      <Copy size={12} />
                       {t("common.copy")}
                     </>
                   )}
                 </button>
               </div>
-              <pre className="max-h-40 overflow-auto rounded bg-bg p-3 text-[11px] leading-relaxed">
+              <pre className="max-h-40 overflow-auto rounded bg-bg p-3 text-2xs leading-relaxed">
                 {httpConfig}
               </pre>
               {routerConfig.instructions && (
-                <div className="mt-2 text-[11px] text-fg-muted">{routerConfig.instructions}</div>
+                <div className="mt-2 text-2xs text-fg-muted">{routerConfig.instructions}</div>
               )}
             </div>
           </div>

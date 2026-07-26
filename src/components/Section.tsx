@@ -9,7 +9,9 @@ export function Section({ title, action, children, className }: {
   return (
     <section className={clsx("space-y-3", className)}>
       {(title || action) && (
-        <div className="flex items-center justify-between">
+        // 用 flex-wrap + gap:窄窗口下 action 控件会折到下一行,而不是挤压成竖排。
+        // 之前用 justify-between + 单行 flex,960×640 下 Logs 页 7 个控件会顶成 1px 宽竖排。
+        <div className="flex flex-wrap items-center justify-between gap-3">
           {title && <h2 className="text-xl font-semibold">{title}</h2>}
           {action}
         </div>

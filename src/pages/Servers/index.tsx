@@ -28,6 +28,8 @@ import {
   FileJson,
   Zap,
   RefreshCw,
+  Check,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
@@ -337,7 +339,7 @@ export function Servers() {
     await copyAndDownload(
       buildMcpServersJson(enabled),
       `mcp_servers_${new Date().toISOString().slice(0, 10)}.json`,
-      t("servers.export_all_btn_label", { defaultValue: "全部 enabled servers" }),
+      t("servers.export_all_btn_label"),
       "servers.toast_exported_all",
     );
     // export-all 显式提示一下 count,toast 已经成功时不再重复。
@@ -391,17 +393,19 @@ export function Servers() {
           </div>
         }
       >
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             className="input max-w-sm"
             placeholder={t("common.search")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            aria-label={t("common.search")}
           />
           <select
             className="input max-w-[180px]"
             value={filterProject}
             onChange={(e) => setFilterProject(e.target.value)}
+            aria-label={t("servers.projects_filter_label") as string}
           >
             <option value="">{t("servers.projects_filter_all")}</option>
             {projects.map((p) => (
@@ -416,7 +420,7 @@ export function Servers() {
         </div>
 
         {install.batch && (
-          <div className="rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-xs">
+          <div className="surface-accent-soft rounded-md px-3 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Loader2 size={12} className="animate-spin text-accent" />
@@ -438,7 +442,7 @@ export function Servers() {
                   后面的 server 一律不再启动 */}
               {install.batch.done < install.batch.total && (
                 <button
-                  className="btn-ghost text-[11px] text-err hover:text-err/80"
+                  className="btn-ghost text-2xs text-err hover:text-err/80"
                   onClick={() => {
                     install.cancelBatch();
                     toast.info(t("servers.batch_install_cancelled") as string);
@@ -451,9 +455,9 @@ export function Servers() {
               )}
               {install.batch.done === install.batch.total && (
                 <div className="flex items-center gap-3">
-                  <span className="text-ok">✓ {install.batch.succeeded.length}</span>
+                  <span className="text-ok"><Check size={12} aria-hidden="true" /> {install.batch.succeeded.length}</span>
                   {install.batch.failed.length > 0 && (
-                    <span className="text-err">✗ {install.batch.failed.length}</span>
+                    <span className="text-err"><XCircle size={12} aria-hidden="true" /> {install.batch.failed.length}</span>
                   )}
                   <button
                     className="text-fg-muted hover:text-fg"
@@ -467,7 +471,7 @@ export function Servers() {
             </div>
             <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-bg-subtle">
               <div
-                className="h-full bg-accent transition-all"
+                className="h-full bg-accent transition-[width]"
                 style={{ width: `${(install.batch.done / install.batch.total) * 100}%` }}
               />
             </div>
@@ -614,7 +618,7 @@ export function Servers() {
               <ul className="space-y-1">
                 {pendingInstall.map((s) => (
                   <li key={s.id} className="flex items-center gap-2">
-                    <span className="badge-mute text-[10px]">{s.command}</span>
+                    <span className="badge-mute text-3xs">{s.command}</span>
                     <span className="font-medium">{s.name}</span>
                     <code className="flex-1 truncate text-xs text-fg-muted">
                       {(s.args ?? []).join(" ")}
@@ -688,7 +692,7 @@ const ServerRow = React.memo(function ServerRow({
 
   return (
     <tr className="border-t border-border hover:bg-overlay-soft">
-      <td className="px-3 py-2 cursor-pointer" onClick={() => onAction("view", s)} title={t("servers.view_action_title")}>
+      <td className="px-3 py-2 cursor-pointer" onClick={() => onAction("view", s)} title={t("servers.view_action_title")} aria-label={t("servers.row_view")}>
         <div className="font-medium">{s.name}</div>
         {s.description && <div className="text-xs text-fg-muted">{s.description}</div>}
       </td>
@@ -732,7 +736,7 @@ const ServerRow = React.memo(function ServerRow({
             </button>
             {s.install_error && (
               <span
-                className="truncate text-[10px] text-fg-muted max-w-[180px]"
+                className="truncate text-3xs text-fg-muted max-w-[180px]"
                 title={s.install_error}
               >
                 {s.install_error}
@@ -746,6 +750,7 @@ const ServerRow = React.memo(function ServerRow({
                     onClick={() => onAction("install", s)}
                     disabled={isInstalling}
                     title={t("servers.tooltip_upgrade")}
+                    aria-label={t("servers.tooltip_upgrade")}
                   >
                     <RefreshCw size={12} />
                   </button>
@@ -754,6 +759,7 @@ const ServerRow = React.memo(function ServerRow({
                     onClick={() => onAction("uninstall", s)}
                     disabled={isUninstalling}
                     title={t("servers.tooltip_uninstall")}
+                    aria-label={t("servers.tooltip_uninstall")}
                   >
                     <Unplug size={12} />
                   </button>
@@ -764,9 +770,10 @@ const ServerRow = React.memo(function ServerRow({
                   onClick={() => onAction("install", s)}
                   disabled={isInstalling}
                   title={t("servers.tooltip_install")}
+                  aria-label={t("servers.tooltip_install")}
                 >
                   <Download size={12} />
-                  <span>{t("servers.install_btn_text_short", { defaultValue: "安装" })}</span>
+                  <span>{t("servers.install_btn_text_short")}</span>
                 </button>
               )}
             </div>
@@ -782,6 +789,7 @@ const ServerRow = React.memo(function ServerRow({
               onClick={() => onAction("stop", s)}
               disabled={isStopping || isProbing || isDeleting}
               title={t("common.stop")}
+              aria-label={t("servers.row_stop")}
             >
               {isStopping ? (
                 <Loader2 size={14} className="animate-spin" />
@@ -795,6 +803,7 @@ const ServerRow = React.memo(function ServerRow({
               onClick={() => onAction("start", s)}
               disabled={isStarting || startBlocked || isProbing || isDeleting}
               title={startBlocked ? t("servers.preinst_required_for_start") : t("common.start")}
+              aria-label={t("servers.row_start")}
             >
               {isStarting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             </button>
@@ -804,6 +813,7 @@ const ServerRow = React.memo(function ServerRow({
             onClick={() => onAction("test", s)}
             disabled={anyBusy}
             title={t("common.test")}
+            aria-label={t("common.test")}
           >
             {isProbing ? (
               <Loader2 size={14} className="animate-spin text-warn" />
@@ -816,6 +826,7 @@ const ServerRow = React.memo(function ServerRow({
             onClick={() => onAction("edit", s)}
             disabled={anyBusy}
             title={t("common.edit")}
+            aria-label={t("servers.row_edit")}
           >
             <Pencil size={14} />
           </button>
@@ -824,6 +835,7 @@ const ServerRow = React.memo(function ServerRow({
             onClick={() => onAction("export", s)}
             disabled={anyBusy}
             title={t("servers.export_single_btn_title") as string}
+            aria-label={t("servers.row_copy")}
           >
             <FileJson size={14} />
           </button>
@@ -832,6 +844,7 @@ const ServerRow = React.memo(function ServerRow({
             onClick={() => onAction("delete", s)}
             disabled={anyBusy}
             title={t("common.delete")}
+            aria-label={t("servers.row_delete")}
           >
             {isDeleting ? (
               <Loader2 size={14} className="animate-spin text-err" />

@@ -28,7 +28,7 @@ export function Layout() {
           <div className="grid h-8 w-8 place-items-center rounded-md bg-accent text-sm font-bold">AI</div>
           <div>
             <div className="text-sm font-semibold leading-tight">{t("app.title")}</div>
-            <div className="text-[11px] text-fg-muted leading-tight">{t("app.tagline")}</div>
+            <div className="text-2xs text-fg-muted leading-tight">{t("app.tagline")}</div>
           </div>
         </div>
         <nav className="flex-1 space-y-0.5 p-2" aria-label="Main navigation">
@@ -52,7 +52,7 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-border p-3 text-[11px] text-fg-muted">
+        <div className="border-t border-border p-3 text-2xs text-fg-muted">
           v{__APP_VERSION__ ?? "0.2.0"} · Tauri 2 + React
         </div>
       </aside>

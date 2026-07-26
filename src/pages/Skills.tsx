@@ -9,6 +9,7 @@ import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
 import { Modal } from "@/components/Modal";
 import { ConfirmModal } from "@/components/ConfirmModal";
+import { Toggle } from "@/components/Toggle";
 import { toast } from "sonner";
 import {
   listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir,
@@ -179,12 +180,12 @@ export function Skills() {
               aria-label={t("skills.search_label") as string}
             />
             <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title={t("skills.install_from_zip_tooltip") as string}>
-              <Upload size={14}/>{t("skills.install_from_zip")}
+              <Upload className="icon-sm"/>{t("skills.install_from_zip")}
             </button>
             <button className="btn-ghost" onClick={() => openDataDir()} title={t("skills.open_data_dir_tooltip") as string}>
-              <FolderOpen size={14}/>{t("skills.data_dir_btn")}
+              <FolderOpen className="icon-sm"/>{t("skills.data_dir_btn")}
             </button>
-            <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={14}/>{t("common.add")}</button>
+            <button className="btn-primary" onClick={() => setCreating(true)}><Plus className="icon-sm"/>{t("common.add")}</button>
           </div>
         }
       >
@@ -192,7 +193,7 @@ export function Skills() {
           <EmptyHint>{t("common.empty")}</EmptyHint>
         ) : visibleSkills.length === 0 ? (
           <div className="rounded-md border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
-            <Search size={20} className="mx-auto mb-2 opacity-50" />
+            <Search className="icon-lg mx-auto mb-2 opacity-50" />
             {t("skills.no_match", { q: search })}
           </div>
         ) : (
@@ -204,13 +205,13 @@ export function Skills() {
                     <div className="truncate font-semibold">{s.name}</div>
                     {s.description && <div className="line-clamp-2 text-xs text-fg-muted">{s.description}</div>}
                     {s.files && s.files.length > 0 && (
-                      <div className="mt-2 rounded-md bg-bg-subtle px-2 py-1.5 text-[11px] text-fg-muted">
+                      <div className="mt-2 rounded-md bg-bg-subtle px-2 py-1.5 text-2xs text-fg-muted">
                         <div className="mb-1 flex items-center gap-1 font-medium text-fg">
-                          <File size={11}/> {t("skills.files_label", { count: s.files.length })}
+                          <File className="icon-xs"/> {t("skills.files_label", { count: s.files.length })}
                         </div>
                         <ul className="max-h-24 space-y-0.5 overflow-auto pl-1">
                           {s.files.map((f) => (
-                            <li key={f} className="truncate font-mono text-[10px]">{f}</li>
+                            <li key={f} className="truncate font-mono text-3xs">{f}</li>
                           ))}
                         </ul>
                       </div>
@@ -221,12 +222,12 @@ export function Skills() {
                   </span>
                 </div>
                 {s.enabled && (
-                  <div className="mt-2 flex items-center gap-1 text-[11px] text-ok">
-                    <Link2 size={11}/>{t("skills.symlinked_to", { list: targets.filter(t => t.enabled).map(t => t.name).join(" / ") || t("skills.no_target") })}
+                  <div className="mt-2 flex items-center gap-1 text-2xs text-ok">
+                    <Link2 className="icon-xs"/>{t("skills.symlinked_to", { list: targets.filter(t => t.enabled).map(t => t.name).join(" / ") || t("skills.no_target") })}
                   </div>
                 )}
                 <div className="mt-3 flex items-center justify-between">
-                  <div className="text-[11px] text-fg-muted">{new Date(s.updated_at).toLocaleString()}</div>
+                  <div className="text-2xs text-fg-muted">{new Date(s.updated_at).toLocaleString()}</div>
                   <div className="flex gap-1">
                     {/* 启停：绿色 */}
                     <button
@@ -234,18 +235,21 @@ export function Skills() {
                       onClick={() => handleToggle(s)}
                       disabled={!!busyIds[s.id]}
                       title={s.enabled ? t("common.disable") : t("common.enable")}
+                      aria-label={t("skills.card_toggle") as string}
                     >
                       {busyIds[s.id] === "toggle" ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ok border-t-transparent" />
-                      ) : s.enabled ? <EyeOff size={14}/> : <Eye size={14}/>}
+                      ) : s.enabled ? <EyeOff className="icon-sm"/> : <Eye className="icon-sm"/>}
                     </button>
                     {/* 编辑：蓝色 */}
                     <button
                       className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={() => setEditing(s)}
                       disabled={!!busyIds[s.id]}
+                      title={t("common.edit")}
+                      aria-label={t("skills.card_edit") as string}
                     >
-                      <Pencil size={14}/>
+                      <Pencil className="icon-sm"/>
                     </button>
                     {/* 删除：红色 */}
                     <button
@@ -253,10 +257,11 @@ export function Skills() {
                       onClick={() => setConfirmDelete(s)}
                       disabled={!!busyIds[s.id]}
                       title={t("common.delete")}
+                      aria-label={t("skills.card_delete") as string}
                     >
                       {busyIds[s.id] === "delete" ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-err border-t-transparent" />
-                      ) : <Trash2 size={14}/>}
+                      ) : <Trash2 className="icon-sm"/>}
                     </button>
                   </div>
                 </div>
@@ -279,7 +284,7 @@ export function Skills() {
         title={t("skills.targets_title")}
         action={
           <button className="btn-ghost" onClick={() => setAddTargetOpen(true)}>
-            <PlusIcon size={14}/>{t("skills.targets_add_btn")}
+            <PlusIcon className="icon-sm"/>{t("skills.targets_add_btn")}
           </button>
         }
       >
@@ -426,6 +431,13 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
       setStageMsg("");
     }
   };
+  // Enter 直接提交 —— textarea(Skill 编辑器那种)不需要,但普通 input 接 Enter 能省一次鼠标移动。
+  const onInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
   return (
     <Modal
       open
@@ -452,6 +464,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
               placeholder={t("skills.import_modal_placeholder") as string}
               value={path}
               onChange={(e) => setPath(e.target.value)}
+              onKeyDown={onInputKeyDown}
               spellCheck={false}
             />
             <button
@@ -460,19 +473,19 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
               title={t("skills.import_modal_browse_title") as string}
               type="button"
             >
-              <FileSearch size={13}/>{t("skills.import_modal_browse")}
+              <FileSearch className="icon-sm"/>{t("skills.import_modal_browse")}
             </button>
           </div>
-          <p className="mt-1 text-[11px] text-fg-muted">
+          <p className="mt-1 text-2xs text-fg-muted">
             {t("skills.import_modal_caption")}
           </p>
           {busy && stageMsg && (
             <div
               role="status"
               aria-live="polite"
-              className="mt-2 inline-flex items-center gap-2 rounded bg-accent/10 px-2 py-1 text-[11px] text-accent"
+              className="mt-2 inline-flex items-center gap-2 rounded bg-accent/10 px-2 py-1 text-2xs text-accent"
             >
-              <FileSearch size={11} className="animate-pulse" />
+              <FileSearch className="icon-xs animate-pulse" />
               {stageMsg}
             </div>
           )}
@@ -495,23 +508,18 @@ function TargetRow({ target, onReload, onAskDelete, onAskEdit }: { target: Skill
   return (
     <div className="flex items-center gap-2 rounded-md bg-bg-subtle px-3 py-2">
       {/* toggle */}
-      <button
-        onClick={handleToggle}
-        role="switch"
-        aria-checked={target.enabled}
-        aria-label={`${target.name} ${target.enabled ? t("common.enabled") : t("common.disabled")}`}
+      <Toggle
+        checked={target.enabled}
+        onChange={() => handleToggle()}
+        label={`${target.name} ${target.enabled ? t("common.enabled") : t("common.disabled")}`}
+        busy={!!busy}
         disabled={!!busy}
-        aria-busy={!!busy}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${target.enabled ? "bg-accent" : "bg-fg-muted/30 dark:bg-overlay-soft"}`}
-        title={target.enabled ? t("common.enabled") : t("common.disabled")}
-      >
-        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${target.enabled ? "left-4" : "left-0.5"}`} />
-      </button>
+      />
       <div className="w-32 shrink-0 text-sm font-medium">{target.name}</div>
       <code className="flex-1 truncate text-xs text-fg-muted">{target.path}</code>
-      {target.builtin && <span className="badge-mute text-[10px]">{t("skills.targets_builtin_badge")}</span>}
-      <button className="btn-ghost p-1.5 disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskEdit(target)} disabled={!!busy} title={t("skills.targets_edit_path_title")}><Pencil size={12}/></button>
-      {!target.builtin && <button className="btn-ghost p-1.5 text-err disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskDelete(target)} disabled={!!busy} title={t("skills.targets_delete_title")}><Trash2 size={12}/></button>}
+      {target.builtin && <span className="badge-mute text-3xs">{t("skills.targets_builtin_badge")}</span>}
+      <button className="btn-ghost p-1.5 disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskEdit(target)} disabled={!!busy} title={t("skills.targets_edit_path_title")}><Pencil className="icon-xs"/></button>
+      {!target.builtin && <button className="btn-ghost p-1.5 text-err disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => onAskDelete(target)} disabled={!!busy} title={t("skills.targets_delete_title")}><Trash2 className="icon-xs"/></button>}
     </div>
   );
 }
@@ -523,7 +531,11 @@ function AddTargetModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (!name.trim() || !path.trim()) return;
+    // 空字段给个 toast,不再静默吞 —— 用户点击却没反应最容易让人怀疑应用坏了
+    if (!name.trim() || !path.trim()) {
+      toast.error(t("skills.target_add_required") as string);
+      return;
+    }
     setBusy(true);
     try {
       await addSkillTarget(name.trim(), path.trim());
@@ -533,6 +545,13 @@ function AddTargetModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
       toast.error(t("skills.target_add_failed", { msg: describeError(e) }) as string);
     } finally {
       setBusy(false);
+    }
+  };
+  // Enter 直接提交 —— 省一次鼠标移到「添加」按钮
+  const onInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
     }
   };
 
@@ -553,11 +572,11 @@ function AddTargetModal({ onClose, onAdded }: { onClose: () => void; onAdded: ()
       <div className="space-y-3">
         <div>
           <label className="mb-1 block text-sm text-fg-muted">{t("skills.target_add_placeholder_name")}</label>
-          <input className="input w-full" placeholder={t("skills.add_target_name_placeholder") as string} value={name} onChange={(e) => setName(e.target.value)} />
+          <input className="input w-full" placeholder={t("skills.add_target_name_placeholder") as string} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onInputKeyDown} />
         </div>
         <div>
           <label className="mb-1 block text-sm text-fg-muted">{t("skills.add_target_path_label")}</label>
-          <input className="input w-full font-mono text-xs" placeholder={t("skills.add_target_path_placeholder") as string} value={path} onChange={(e) => setPath(e.target.value)} />
+          <input className="input w-full font-mono text-xs" placeholder={t("skills.add_target_path_placeholder") as string} value={path} onChange={(e) => setPath(e.target.value)} onKeyDown={onInputKeyDown} />
           <p className="mt-1 text-xs text-fg-muted">
             {t("skills.add_target_path_hint")}
           </p>
@@ -593,6 +612,13 @@ function EditTargetPathModal({ target, onClose, onSaved }: {
       setBusy(false);
     }
   };
+  // Enter 直接提交 —— 单输入框,无多行场景,无需 shift 判断
+  const onInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
 
   return (
     <Modal
@@ -618,6 +644,7 @@ function EditTargetPathModal({ target, onClose, onSaved }: {
             placeholder={t("skills.add_target_path_placeholder") as string}
             value={path}
             onChange={(e) => setPath(e.target.value)}
+            onKeyDown={onInputKeyDown}
             spellCheck={false}
           />
           <p className="mt-1 text-xs text-fg-muted">

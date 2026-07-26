@@ -1,13 +1,49 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy } from "lucide-react";
+import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
 import { Modal } from "@/components/Modal";
+import { Toggle } from "@/components/Toggle";
 import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, revealToken, rewriteClientConfigs, enableAutostart, disableAutostart, isAutostartEnabled, doctorCheck } from "@/lib/ipc";
 import type { AppSettings, DoctorItem } from "@/lib/ipc";
 import { useApp, previewTheme, readPersistedUi, type ThemeName } from "@/stores/app";
 import { describeError } from "@/lib/errors";
+
+/**
+ * 读取某主题的 --accent / --bg CSS 变量并转成可直接给 style.background 用的 rgb() 字符串。
+ *
+ * 为什么要这么做:
+ *   主题卡片的 swatch 之前硬编码了 4 套 hex,但主题色板集中在 global.css 里,
+ *   之后调色板都要双份维护(色板改一处忘了改另一处 → 卡面和实际不一致,排查很痛)。
+ *   现在从 CSS 变量读,改一处全站同步。
+ *
+ * 限制:
+ *   - 只在浏览器跑(getComputedStyle);SSR 下窗口对象不存在,这里直接返回 null,
+ *     调用方保证是客户端渲染(useEffect 之后才渲染 swatch)。
+ *   - 临时把 [data-theme] 写到 <html> 上读一次就还原 —— 不动全局主题,只为了拿那套 CSS 变量。
+ *     原主题由 [data-theme] 实际值持有,切换前后不影响。
+ */
+function useThemeSwatch(themeKey: ThemeName): { swatch: string; bg: string } | null {
+  const [colors, setColors] = useState<{ swatch: string; bg: string } | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const html = document.documentElement;
+    const prev = html.getAttribute("data-theme");
+    // 临时切到目标主题 → 读 → 还原
+    html.setAttribute("data-theme", themeKey);
+    const cs = getComputedStyle(html);
+    const accent = cs.getPropertyValue("--accent").trim();
+    const bg = cs.getPropertyValue("--bg-subtle").trim();
+    if (prev) html.setAttribute("data-theme", prev); else html.removeAttribute("data-theme");
+    if (!accent || !bg) {
+      setColors(null);
+      return;
+    }
+    setColors({ swatch: `rgb(${accent})`, bg: `rgb(${bg})` });
+  }, [themeKey]);
+  return colors;
+}
 
 export function Settings() {
   const { t, i18n } = useTranslation();
@@ -34,6 +70,9 @@ export function Settings() {
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
+  // 保存按钮 busy:避免 save 期间用户连点 N 次触发 N 次 IPC,
+  // 同时让按钮显示 spinner 表明正在写盘。
+  const [saving, setSaving] = useState(false);
 
   // "已保存" 提示 2000ms 自动收起 —— 卸载时清掉,避免 setState 在已卸载组件上
   useEffect(() => {
@@ -92,7 +131,8 @@ export function Settings() {
   };
 
   const save = async () => {
-    if (!settings) return;
+    if (!settings || saving) return;
+    setSaving(true);
     try {
       await updateSettings(settings);
       setStoreSettings(settings);
@@ -100,6 +140,8 @@ export function Settings() {
       void i18n.changeLanguage(settings.language);
     } catch (e) {
       toast.error(t("settings.save_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -179,7 +221,7 @@ export function Settings() {
           <div className="mb-2 font-medium text-err">{t("connections.load_error_title")}</div>
           <div className="mb-3 text-xs text-fg-muted">{t("connections.load_error_desc")}</div>
           <button className="btn-primary" onClick={reloadSettings}>
-            <RefreshCw size={14} />
+            <RefreshCw className="icon-sm" />
             {t("connections.retry")}
           </button>
         </div>
@@ -191,7 +233,11 @@ export function Settings() {
   return (
     <div className="space-y-4 p-6">
       <Section title={t("settings.title")} action={
-        <button className="btn-primary" onClick={save}><Save size={14}/>{t("common.save")}{saved && " ✓"}</button>
+        <button className="btn-primary" onClick={save} disabled={saving}>
+          {saving ? <Loader2 className="icon-sm inline animate-spin mr-1" /> : <Save className="icon-sm"/>}
+          {saving ? t("settings.saving") : t("common.save")}
+          {!saving && saved && <Check size={12} aria-hidden="true" />}
+        </button>
       }>
         {/* General */}
         <div className="card space-y-3">
@@ -199,7 +245,7 @@ export function Settings() {
           <Row label={t("common.language")}>
             <select className="input max-w-[200px]" value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value as "zh" | "en" })}>
               <option value="zh">{t("settings.lang_zh")}</option>
-              <option value="en">English</option>
+              <option value="en">{t("settings.lang_en")}</option>
             </select>
           </Row>
           <Row label={t("settings.logs_max_entries")}>
@@ -235,32 +281,19 @@ export function Settings() {
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {([
-              { id: "light",    label: t("settings.theme_light"),    swatch: "#7c3aed", bg: "#f8fafc" },
-              { id: "purple",   label: t("settings.theme_purple"),   swatch: "#7c5cff", bg: "#0f1115" },
-              { id: "midnight", label: t("settings.theme_midnight"), swatch: "#38bdf8", bg: "#0a1628" },
-              { id: "forest",   label: t("settings.theme_forest"),   swatch: "#34d399", bg: "#0f1f15" },
-            ] as const).map(({ id, label, swatch, bg }) => {
-              const active = activeTheme === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => switchTheme(id)}
-                  className={`group relative overflow-hidden rounded-lg border px-3 py-3 text-left transition-all ${
-                    active ? "border-accent ring-2 ring-accent/40" : "border-border hover:border-accent/50"
-                  }`}
-                >
-                  <div className="mb-2 h-10 w-full rounded-md" style={{ background: bg }}>
-                    <div className="flex h-full w-full items-center justify-end pr-2">
-                      <span className="inline-block h-4 w-4 rounded-full" style={{ background: swatch }} />
-                    </div>
-                  </div>
-                  <div className="text-sm font-medium">{label}</div>
-                  {active && (
-                    <span className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[10px] text-white">✓</span>
-                  )}
-                </button>
-              );
-            })}
+              { id: "light",    label: t("settings.theme_light") },
+              { id: "purple",   label: t("settings.theme_purple") },
+              { id: "midnight", label: t("settings.theme_midnight") },
+              { id: "forest",   label: t("settings.theme_forest") },
+            ] as const).map(({ id, label }) => (
+              <ThemeCard
+                key={id}
+                id={id}
+                label={label}
+                active={activeTheme === id}
+                onSelect={() => switchTheme(id)}
+              />
+            ))}
           </div>
         </div>
 
@@ -268,7 +301,7 @@ export function Settings() {
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Power size={16} className="text-accent" />
+              <Power className="icon-md text-accent" />
               <div>
                 <div className="text-sm font-medium">{t("settings.auto_launch")}</div>
                 <div className="text-xs text-fg-muted">
@@ -276,20 +309,14 @@ export function Settings() {
                 </div>
               </div>
             </div>
-            <button
-              onClick={() => handleAutoLaunch(!autoLaunch)}
-              role="switch"
-              aria-checked={autoLaunch}
-              aria-busy={autoLaunchBusy}
-              aria-label={t("settings.autostart_card_title")}
+            <Toggle
+              checked={autoLaunch}
+              onChange={(next) => handleAutoLaunch(next)}
+              label={t("settings.autostart_card_title")}
+              busy={autoLaunchBusy}
               disabled={autoLaunchBusy}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${autoLaunch ? "bg-accent" : "bg-fg-muted/30 dark:bg-overlay-soft"}`}
-              title={t(autoLaunch ? "common.enabled" : "common.disabled")}
-            >
-              <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-bg-subtle shadow-sm transition-all ${autoLaunch ? "left-5" : "left-0.5"}`}
-              />
-            </button>
+              size="md"
+            />
           </div>
         </div>
 
@@ -301,7 +328,7 @@ export function Settings() {
               <div className="text-xs text-fg-muted">{t("settings.doctor_desc")}</div>
             </div>
             <button className="btn-primary inline-flex items-center gap-1.5" onClick={runDoctor} disabled={doctorRunning}>
-              {doctorRunning ? <Loader2 size={14} className="animate-spin"/> : <Stethoscope size={14}/>}
+              {doctorRunning ? <Loader2 className="icon-sm animate-spin"/> : <Stethoscope className="icon-sm"/>}
               {doctorRunning ? t("settings.doctor_running") : doctor ? t("settings.doctor_rerun") : t("settings.doctor_run")}
             </button>
           </div>
@@ -311,9 +338,9 @@ export function Settings() {
                 <li key={it.id} className="rounded-lg border border-border bg-bg-subtle px-3 py-2">
                   <div className="flex items-start gap-2.5">
                     <span className="mt-0.5 shrink-0">
-                      {it.status === "ok" ? <CheckCircle2 size={15} className="text-ok"/>
-                        : it.status === "warn" ? <AlertTriangle size={15} className="text-warn"/>
-                        : <XCircle size={15} className="text-err"/>}
+                      {it.status === "ok" ? <CheckCircle2 className="icon-sm text-ok"/>
+                        : it.status === "warn" ? <AlertTriangle className="icon-sm text-warn"/>
+                        : <XCircle className="icon-sm text-err"/>}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
@@ -328,7 +355,7 @@ export function Settings() {
                             title={t("settings.copy_suggestion") as string}
                             onClick={() => { navigator.clipboard.writeText(it.suggestion!).catch(() => {}); toast.success(t("settings.copied") as string, { duration: 1200 }); }}
                           >
-                            <Copy size={11}/>
+                            <Copy className="icon-xs"/>
                           </button>
                         </div>
                       )}
@@ -347,7 +374,7 @@ export function Settings() {
           <Row label={t("settings.data_dir")}>
             <div className="flex items-center gap-2">
               <code className="text-xs text-fg-muted">{info?.data_dir ?? "—"}</code>
-              <button className="btn-ghost p-1.5" onClick={() => openDataDir()} title={t("settings.open_data_dir") as string}><FolderOpen size={14}/></button>
+              <button className="btn-ghost p-1.5" onClick={() => openDataDir()} title={t("settings.open_data_dir") as string}><FolderOpen className="icon-sm"/></button>
             </div>
           </Row>
           <Row label="MCPR_TOKEN">
@@ -369,7 +396,7 @@ export function Settings() {
                 }}
                 title={t("settings.token_regen_tooltip") as string}
               >
-                <RefreshCw size={14}/>
+                <RefreshCw className="icon-sm"/>
               </button>
             </div>
           </Row>
@@ -398,7 +425,7 @@ export function Settings() {
                 disabled={regenBusy || regenCode.trim() !== regenTokenTail}
                 title={regenCode.trim() !== regenTokenTail ? t("settings.token_regen_match_required") as string : undefined}
               >
-                {regenBusy ? <Loader2 size={14} className="inline animate-spin mr-1" /> : null}
+                {regenBusy ? <Loader2 className="icon-sm inline animate-spin mr-1" /> : null}
                 {t("settings.token_regen_confirm_btn")}
               </button>
             </>
@@ -406,7 +433,7 @@ export function Settings() {
         >
           <p className="text-sm text-fg-muted">{t("settings.token_regen_confirm_desc")}</p>
           <div className="mt-3 rounded-md border border-border bg-bg-subtle p-3">
-            <div className="mb-1 text-[11px] text-fg-muted">{t("settings.token_regen_input_label")}</div>
+            <div className="mb-1 text-2xs text-fg-muted">{t("settings.token_regen_input_label")}</div>
             <input
               className="input font-mono"
               value={regenCode}
@@ -415,7 +442,7 @@ export function Settings() {
               autoComplete="off"
               spellCheck={false}
             />
-            <div className="mt-1 text-[11px] text-fg-muted">
+            <div className="mt-1 text-2xs text-fg-muted">
               {t("settings.token_regen_input_hint", { tail: regenTokenTail })}
             </div>
           </div>
@@ -431,5 +458,47 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <div className="w-32 shrink-0 text-sm text-fg-muted">{label}</div>
       <div className="flex-1">{children}</div>
     </div>
+  );
+}
+
+/**
+ * 单张主题卡片。从 useThemeSwatch 拿该主题的 --accent / --bg-subtle,
+ * 渲染到 swatch + bg 上 —— 不再硬编码 hex,改色板只改 global.css 一处。
+ */
+function ThemeCard({
+  id,
+  label,
+  active,
+  onSelect,
+}: {
+  id: ThemeName;
+  label: string;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const swatch = useThemeSwatch(id);
+  return (
+    <button
+      onClick={onSelect}
+      className={`group relative overflow-hidden rounded-lg border px-3 py-3 text-left transition-colors ${
+        active ? "border-accent ring-2 ring-accent/40" : "border-border hover:border-accent/50"
+      }`}
+    >
+      <div
+        className="mb-2 h-10 w-full rounded-md"
+        style={{ background: swatch?.bg ?? "transparent" }}
+      >
+        <div className="flex h-full w-full items-center justify-end pr-2">
+          <span
+            className="inline-block h-4 w-4 rounded-full"
+            style={{ background: swatch?.swatch ?? "transparent" }}
+          />
+        </div>
+      </div>
+      <div className="text-sm font-medium">{label}</div>
+      {active && (
+        <span className="absolute right-1 top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-accent text-3xs text-white"><Check size={12} aria-hidden="true" /></span>
+      )}
+    </button>
   );
 }
