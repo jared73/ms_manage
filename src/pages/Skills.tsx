@@ -502,7 +502,7 @@ function TargetRow({ target, onReload, onAskDelete, onAskEdit }: { target: Skill
         aria-label={`${target.name} ${target.enabled ? t("common.enabled") : t("common.disabled")}`}
         disabled={!!busy}
         aria-busy={!!busy}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${target.enabled ? "bg-accent" : "bg-overlay-soft"}`}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${target.enabled ? "bg-accent" : "bg-fg-muted/30 dark:bg-overlay-soft"}`}
         title={target.enabled ? t("common.enabled") : t("common.disabled")}
       >
         <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-bg-subtle shadow-sm transition-all ${target.enabled ? "left-4" : "left-0.5"}`} />

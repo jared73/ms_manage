@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy } from "lucide-react";
 import { toast } from "sonner";
@@ -17,6 +17,9 @@ export function Settings() {
   const persistedTheme = readPersistedUi().theme;
   const activeTheme = (storeSettings?.theme as ThemeName | undefined) ?? persistedTheme;
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   // Token 重置双确认:用户首次点"重新生成"时弹窗说明影响 + 让用户输入当前的 token 末 4 位
   // (避免误点一刀斩断所有客户端的连接)
@@ -51,16 +54,28 @@ export function Settings() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    setSettingsLoading(true);
+    setSettingsLoadError(false);
     void (async () => {
       try {
-        setSettings(await getSettings());
+        const s = await getSettings();
+        if (cancelled) return;
+        setSettings(s);
         setInfo(await appInfo());
         setAutoLaunchState(await isAutostartEnabled().catch(() => false));
       } catch (e) {
+        if (cancelled) return;
+        setSettingsLoadError(true);
         toast.error(t("settings.load_failed", { msg: describeError(e) }) as string);
+      } finally {
+        if (!cancelled) setSettingsLoading(false);
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadTick]);
 
   const handleAutoLaunch = async (next: boolean) => {
     if (autoLaunchBusy) return;
@@ -144,6 +159,33 @@ export function Settings() {
     }
   };
 
+  const reloadSettings = useCallback(() => setReloadTick((n) => n + 1), []);
+
+  // 加载 / 失败态显式提示 —— 否则 IPC 失败时整页空白,
+  // 用户看不到「开机自启」开关在哪(就像这次报告的问题)。
+  if (settingsLoading && !settingsLoadError && !settings) {
+    return (
+      <div className="space-y-3 p-6">
+        <div className="h-4 w-1/3 animate-pulse rounded bg-bg-subtle" />
+        <div className="h-24 animate-pulse rounded bg-bg-subtle" />
+        <div className="h-24 animate-pulse rounded bg-bg-subtle" />
+      </div>
+    );
+  }
+  if (settingsLoadError && !settings) {
+    return (
+      <div className="p-6">
+        <div className="rounded-md border border-err/40 bg-err/5 p-4 text-sm">
+          <div className="mb-2 font-medium text-err">{t("connections.load_error_title")}</div>
+          <div className="mb-3 text-xs text-fg-muted">{t("connections.load_error_desc")}</div>
+          <button className="btn-primary" onClick={reloadSettings}>
+            <RefreshCw size={14} />
+            {t("connections.retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!settings) return null;
 
   return (
@@ -241,7 +283,7 @@ export function Settings() {
               aria-busy={autoLaunchBusy}
               aria-label={t("settings.autostart_card_title")}
               disabled={autoLaunchBusy}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${autoLaunch ? "bg-accent" : "bg-fg-muted/30 dark:bg-overlay-soft"}`}
               title={t(autoLaunch ? "common.enabled" : "common.disabled")}
             >
               <span
