@@ -90,6 +90,43 @@ pub async fn get_tools_total(state: State<'_, Arc<AppState>>) -> Result<usize, S
     Ok(total)
 }
 
+/// 单条日志字段上限:4KB。防止单条「未知 POST」日志把 16MB body 直接写进日志缓冲。
+/// 截断走 `floor_char_boundary` 保证 UTF-8 安全,末尾追加 `…[+N bytes]` 标识。
+const MAX_LOG_FIELD_BYTES: usize = 4 * 1024;
+
+/// 已知日志来源白名单。不在白名单的 source 降级到 "system",
+/// 避免前端/调试接入层乱塞来源撑爆 UI 过滤面板(以及恶意 source 注入)。
+///
+/// 调整白名单时同步更新前端 `LogSource` 枚举。
+const KNOWN_LOG_SOURCES: &[&str] = &[
+    "storage",
+    "proxy",
+    "proxy.http",
+    "client",
+    "server",
+    "mcp",
+    "tool",
+];
+
+fn sanitize_log_source(source: &str) -> &str {
+    if KNOWN_LOG_SOURCES.iter().any(|s| *s == source) {
+        source
+    } else {
+        "system"
+    }
+}
+
+/// UTF-8 安全的截断:超过 max 字节按 `floor_char_boundary` 切到最近的字符边界,
+/// 末尾追加 `…[+N bytes]` 标记被截掉的字节数。
+fn truncate_log_field(s: String, max: usize) -> String {
+    if s.len() <= max {
+        return s;
+    }
+    let cut = s.floor_char_boundary(max);
+    let dropped = s.len() - cut;
+    format!("{}…[+{} bytes]", &s[..cut], dropped)
+}
+
 /// 写一条日志（GUI 端"日志"页可见）
 #[tauri::command]
 pub fn log_event(
@@ -101,6 +138,12 @@ pub fn log_event(
 ) {
     let _ = state;
     use crate::storage::LogRecord;
+    // source 走白名单:未知来源降级到 "system",避免不可信来源塞日志源面板。
+    let source = sanitize_log_source(&source).to_string();
+    // message / detail 各自限 4KB —— 之前不限制,16MB body 一条日志就吃掉
+    // 整个 logs Vec 5000 容量的 1/3,挤掉其它关键日志。
+    let message = truncate_log_field(message, MAX_LOG_FIELD_BYTES);
+    let detail = detail.map(|d| truncate_log_field(d, MAX_LOG_FIELD_BYTES));
     let log = LogRecord {
         id: uuid::Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),

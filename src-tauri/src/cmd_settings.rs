@@ -126,7 +126,16 @@ pub fn update_settings(
     stored.npm_registry = settings.npm_registry;
     stored.auto_inject_npm_registry = settings.auto_inject_npm_registry;
     stored.skill_targets = settings.skill_targets;
-    state.storage.save_settings(&stored).map_err(|e| e.to_string())
+    state.storage.save_settings(&stored).map_err(|e| e.to_string())?;
+    let token = stored.mcp_token.clone().unwrap_or_default();
+    // 原子绑 (token, generation):锁内一次性 bump gen + 写 token,
+    // handler 读时一次性 clone 整个 tuple,不会看到「gen 已 +1 但 token 还是旧的」。
+    {
+        let mut guard = state.cached_token.lock().unwrap_or_else(|e| e.into_inner());
+        let next_gen = guard.1.wrapping_add(1);
+        *guard = (token, next_gen);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -164,6 +173,12 @@ pub fn regenerate_token(state: State<'_, Arc<AppState>>) -> Result<RegenerateTok
     let new_token = crate::storage::generate_token();
     settings.mcp_token = Some(new_token.clone());
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
+    // 原子绑 (token, generation),见 update_settings 注释。
+    {
+        let mut guard = state.cached_token.lock().unwrap_or_else(|e| e.into_inner());
+        let next_gen = guard.1.wrapping_add(1);
+        *guard = (new_token.clone(), next_gen);
+    }
     Ok(RegenerateTokenResult { token: new_token })
 }
 
