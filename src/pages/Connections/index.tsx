@@ -23,9 +23,19 @@ export function Connections() {
   const [copied, setCopied] = useState<string>("");
   const [revealBusy, setRevealBusy] = useState(false);
 
-  const copy = (text: string | null, key: string, label: string) => {
+  const copy = async (text: string | null, key: string, label: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text).catch(() => {});
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // 剪贴板写入失败(浏览器策略 / 非安全上下文 / 权限被拒)——
+      // 之前是 .catch(() => {}) 静默吞掉,用户以为已复制实际没有。这里给个明确的 fallback toast。
+      toast.warning(
+        t("servers.toast_clipboard_failed", { label }) as string,
+        { duration: 4000 },
+      );
+      return;
+    }
     setCopied(key);
     toast.success(t("connections.copied", { label }), { duration: 1500 });
   };
@@ -170,7 +180,7 @@ export function Connections() {
                 className="btn-ghost px-2 py-0.5 text-[11px]"
                 onClick={(e) => {
                   e.preventDefault();
-                  if (npxConfig) copy(npxConfig, "npx", t("connections.npx_card_title"));
+                  if (npxConfig) void copy(npxConfig, "npx", t("connections.npx_card_title"));
                 }}
                 disabled={!npxConfig}
               >
@@ -238,9 +248,9 @@ export function Connections() {
                 </span>
                 <button
                   className="btn-ghost px-2 py-0.5 text-[11px]"
-                  onClick={() =>
-                    httpConfig && copy(httpConfig, "http", t("connections.http_card_title"))
-                  }
+                  onClick={() => {
+                    httpConfig && void copy(httpConfig, "http", t("connections.http_card_title"));
+                  }}
                 >
                   {copied === "http" ? (
                     <span>✓ {t("common.copied")}</span>

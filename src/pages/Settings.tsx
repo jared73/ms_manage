@@ -28,6 +28,7 @@ export function Settings() {
   const [regenTokenTail, setRegenTokenTail] = useState("");
   const [saved, setSaved] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
+  const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
 
@@ -62,12 +63,16 @@ export function Settings() {
   }, []);
 
   const handleAutoLaunch = async (next: boolean) => {
+    if (autoLaunchBusy) return;
+    setAutoLaunchBusy(true);
     try {
       if (next) { await enableAutostart(); } else { await disableAutostart(); }
       setAutoLaunchState(next);
       toast.success(t(next ? "settings.autostart_on" : "settings.autostart_off") as string, { duration: 1500 });
     } catch (e) {
       toast.error(t("settings.autostart_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setAutoLaunchBusy(false);
     }
   };
 
@@ -85,6 +90,7 @@ export function Settings() {
 
   const switchTheme = async (theme: ThemeName) => {
     if (!settings || theme === activeTheme) return;
+    const prevTheme = settings.theme;
     previewTheme(theme); // 立即反映到 DOM,等 setStoreSettings 兜底
     const updated = { ...settings, theme };
     setSettings(updated);
@@ -93,6 +99,10 @@ export function Settings() {
       setStoreSettings(updated);
       toast.success(t("settings.theme_switched") as string, { duration: 1500 });
     } catch (e) {
+      // 写盘失败时回滚:把本地 state + DOM 都退回旧主题,
+      // 否则用户看到的色和下次重启后的色不一致,排查"我明明选了为啥又变了"会很难。
+      previewTheme(prevTheme);
+      setSettings({ ...settings, theme: prevTheme });
       toast.error(t("settings.theme_update_failed", { msg: describeError(e) }) as string);
     }
   };
@@ -228,8 +238,10 @@ export function Settings() {
               onClick={() => handleAutoLaunch(!autoLaunch)}
               role="switch"
               aria-checked={autoLaunch}
+              aria-busy={autoLaunchBusy}
               aria-label={t("settings.autostart_card_title")}
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
+              disabled={autoLaunchBusy}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60 disabled:cursor-not-allowed ${autoLaunch ? "bg-accent" : "bg-overlay-soft"}`}
               title={t(autoLaunch ? "common.enabled" : "common.disabled")}
             >
               <span
@@ -258,7 +270,7 @@ export function Settings() {
                   <div className="flex items-start gap-2.5">
                     <span className="mt-0.5 shrink-0">
                       {it.status === "ok" ? <CheckCircle2 size={15} className="text-ok"/>
-                        : it.status === "warn" ? <AlertTriangle size={15} className="text-amber-400"/>
+                        : it.status === "warn" ? <AlertTriangle size={15} className="text-warn"/>
                         : <XCircle size={15} className="text-err"/>}
                     </span>
                     <div className="min-w-0 flex-1">
@@ -267,7 +279,7 @@ export function Settings() {
                         <span className="text-xs text-fg-muted">{it.detail}</span>
                       </div>
                       {it.suggestion && (
-                        <div className="mt-1 flex items-start gap-1.5 text-xs text-amber-300">
+                        <div className="mt-1 flex items-start gap-1.5 text-xs text-warn">
                           <span className="flex-1 break-all">{it.suggestion}</span>
                           <button
                             className="btn-ghost shrink-0 p-0.5"

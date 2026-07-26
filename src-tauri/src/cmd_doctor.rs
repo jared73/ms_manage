@@ -57,10 +57,10 @@ pub async fn doctor_check(state: State<'_, Arc<AppState>>) -> Result<Vec<CheckIt
     let settings = state.storage.load_settings().map_err(|e| e.to_string())?;
     let npm_registry = settings.npm_registry.trim().to_string();
 
-    // 1. Node.js（CLI 需要 >=14）
+    // 1. Node.js（CLI 需要 >=18）
     items.push(check_tool(
-        "node", "Node.js", "node", 14,
-        "安装 Node.js 14+：https://nodejs.org （客户端用 npx 接入必须）",
+        "node", "Node.js", "node", 18,
+        "安装 Node.js 18+：https://nodejs.org （客户端用 npx 接入必须）",
     ).await);
 
     // 2. npm

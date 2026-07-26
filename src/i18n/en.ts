@@ -93,6 +93,9 @@ export default {
     batch_install_no_pending: "No server needs pre-installation",
     batch_install_run_done_ok: "Batch install complete: {{count}} servers ready",
     batch_install_run_done_warn: "Batch install complete: {{ok}} ok, {{fail}} failed (see progress bar below)",
+    batch_install_cancelled: "Cancellation requested — batch will stop after the current server finishes",
+    batch_install_cancel_btn: "Cancel",
+    batch_install_cancel_tooltip: "Skip remaining servers; the one currently installing will run to completion (avoid orphan processes)",
     batch_install_progress: "Batch install {{done}}/{{total}}",
     batch_install_current: "Installing: {{name}}",
     export_btn: "Export JSON",
@@ -250,6 +253,7 @@ export default {
     import_modal_browse_title: "Open file picker",
     import_modal_browse: "Browse",
     import_modal_caption: "Supports .zip / .tar.gz / .tgz / entire folders; SKILL.md at any depth is detected",
+    import_stage_start: "Preparing to extract…",
     // AddTargetModal
     add_target_title: "Add integration target",
     add_target_name_placeholder: "e.g. Trae / Kiro / Continue",
@@ -288,13 +292,13 @@ export default {
     revealing: "Fetching token…",
     intro:
       "Paste the config below into any MCP client's mcpServers (Claude Desktop / Cursor / Cline / Continue …). The client will on-demand npx download @ms-manage/cli (a ~100-line stdio↔HTTP forwarder) and forward requests to MS Manage's local HTTP port.",
-    bullet_no_install: "Client doesn't need MS Manage installed — only needs npx (Node.js 14+)",
+    bullet_no_install: "Client doesn't need MS Manage installed — only needs npx (Node.js 18+)",
     bullet_running: "MS Manage must keep running (close GUI = proxy dies = client disconnects)",
     bullet_cross_platform: "Cross-platform (same config on macOS / Linux / Windows)",
     bullet_shared: "Multiple users can share the same MS Manage instance",
     prereq_title: "Client machine requirements:",
     prereq_node:
-      "Node.js installed (14+). If not, download from nodejs.org; run node -v to confirm. This is the most common failure — no Node on the machine.",
+      "Node.js installed (18+). If not, download from nodejs.org; run node -v to confirm. This is the most common failure — no Node on the machine.",
     prereq_network:
       "First run needs internet to download @ms-manage/cli. Behind GFW, switch npm to a faster mirror: npm config set registry https://registry.npmmirror.com",
     prereq_cache:
@@ -357,6 +361,7 @@ export default {
     npm_card_title: "NPM / Registry",
     npm_registry_card_desc: "Auto-inject NPM_CONFIG_REGISTRY when starting stdio child servers=",
     autostart_card_desc: "Auto-launch MS Manage on system start (window minimized to tray)",
+    autostart_card_title: "Launch at startup toggle",
     theme_purple: "Purple",
     theme_midnight: "Midnight",
     theme_forest: "Forest",

@@ -434,6 +434,21 @@ export function Servers() {
                     })()}
                 </span>
               </div>
+              {/* 跑完前显示 ✕ 取消按钮 —— 当前这条会跑完(避免子进程僵死),
+                  后面的 server 一律不再启动 */}
+              {install.batch.done < install.batch.total && (
+                <button
+                  className="btn-ghost text-[11px] text-err hover:text-err/80"
+                  onClick={() => {
+                    install.cancelBatch();
+                    toast.info(t("servers.batch_install_cancelled") as string);
+                  }}
+                  title={t("servers.batch_install_cancel_tooltip") as string}
+                >
+                  <X size={12} />
+                  {t("servers.batch_install_cancel_btn")}
+                </button>
+              )}
               {install.batch.done === install.batch.total && (
                 <div className="flex items-center gap-3">
                   <span className="text-ok">✓ {install.batch.succeeded.length}</span>
@@ -478,13 +493,13 @@ export function Servers() {
             <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-bg-subtle text-left text-xs uppercase text-fg-muted">
                 <tr>
-                  <th className="px-3 py-2 font-medium">{t("common.name")}</th>
-                  <th className="px-3 py-2 font-medium">{t("common.transport")}</th>
-                  <th className="px-3 py-2 font-medium">{t("projects.title")}</th>
-                  <th className="px-3 py-2 font-medium">{t("common.status")}</th>
-                  <th className="px-3 py-2 font-medium">{t("servers.col_pkg")}</th>
-                  <th className="px-3 py-2 font-medium">{t("common.last_error")}</th>
-                  <th className="px-3 py-2 font-medium text-right">{t("common.actions")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("common.name")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("common.transport")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("projects.title")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("common.status")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("servers.col_pkg")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium">{t("common.last_error")}</th>
+                  <th scope="col" className="px-3 py-2 font-medium text-right">{t("common.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -727,7 +742,7 @@ const ServerRow = React.memo(function ServerRow({
               {s.installed ? (
                 <>
                   <button
-                    className="btn-ghost p-1 text-amber-400 hover:text-amber-300 disabled:opacity-40"
+                    className="btn-ghost p-1 text-warn hover:text-warn/80 disabled:opacity-40"
                     onClick={() => onAction("install", s)}
                     disabled={isInstalling}
                     title={t("servers.tooltip_upgrade")}
@@ -785,13 +800,13 @@ const ServerRow = React.memo(function ServerRow({
             </button>
           )}
           <button
-            className="btn-ghost p-1.5 text-amber-400 hover:text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-ghost p-1.5 text-warn hover:text-warn/80 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => onAction("test", s)}
             disabled={anyBusy}
             title={t("common.test")}
           >
             {isProbing ? (
-              <Loader2 size={14} className="animate-spin text-amber-400" />
+              <Loader2 size={14} className="animate-spin text-warn" />
             ) : (
               <TestTube2 size={14} />
             )}

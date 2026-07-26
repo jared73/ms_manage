@@ -3,7 +3,7 @@ use crate::storage::StoredSkill;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, State};
 
 fn to_stored(s: serde_json::Value) -> Result<StoredSkill, String> {
     serde_json::from_value(s).map_err(|e| e.to_string())
@@ -283,8 +283,21 @@ pub struct ImportResult {
 ///   - .tar.gz 同上
 ///   - 文件夹路径（含 SKILL.md）
 /// 压缩包/文件夹顶层可能含多个 skill 子目录，逐个识别导入。
+///
+/// 进度反馈:通过 `skill_import_progress` 事件向 webview 推送三阶段(stage):
+///   - "extracting": 大文件解压中
+///   - "scanning": 找 SKILL.md 中
+///   - "installing": 复制到 skills_dir
+///   - "done" / "error": 终态
+///
+/// 这样前端 ImportModal 能展示「解压中…」「扫描中…」而不是只有一个 spinner:
+/// 100 MB zip 用户等了 10s 没动静就不知道是 UI 卡了还是真在解压。
 #[tauri::command]
-pub async fn import_skill_from_path(path: String, state: State<'_, Arc<AppState>>) -> Result<ImportResult, String> {
+pub async fn import_skill_from_path(
+    path: String,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ImportResult, String> {
     let skills_dir = state.storage.skills_dir();
     std::fs::create_dir_all(&skills_dir).map_err(|e| format!("create skills dir: {e}"))?;
 
@@ -294,46 +307,76 @@ pub async fn import_skill_from_path(path: String, state: State<'_, Arc<AppState>
         return Err(format!("路径不存在: {path}"));
     }
 
-    // 解压/扫描/安装涉及大量 std::fs 阻塞 IO，移到 blocking 线程避免卡 tokio runtime。
-    let storage_ref = state.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<ImportResult, String> {
-        let mut result = ImportResult { imported: vec![], errors: vec![], skipped: vec![] };
+    let path_for_events = path.clone();
+    let path_for_closure = path_for_events.clone();
+    let result = tauri::async_runtime::spawn_blocking({
+        let app_handle = app.clone();
+        move || -> Result<ImportResult, String> {
+            let p_inner = std::path::PathBuf::from(&path_for_closure);
+            let mut result = ImportResult { imported: vec![], errors: vec![], skipped: vec![] };
 
-        let lower_name = p.file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
+            let lower_name = p_inner.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
 
-        let extracted_dirs: Vec<std::path::PathBuf> = if lower_name.ends_with(".zip") {
-            extract_zip_to_temp(&p).map_err(|e| format!("解压 zip 失败: {e}"))?
-        } else if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
-            extract_tar_gz_to_temp(&p).map_err(|e| format!("解压 tar.gz 失败: {e}"))?
-        } else if p.is_dir() {
-            vec![p.clone()]
-        } else {
-            return Err(format!("不支持的文件类型: {path}（仅支持 .zip / .tar.gz / 文件夹）"));
-        };
+            // 进度反馈:开始解压
+            let _ = app_handle.emit("skill_import_progress", serde_json::json!({
+                "path": path_for_closure, "stage": "extracting", "message": "正在解压..."
+            }));
 
-        // 扫描：每个 extracted dir 里找 SKILL.md，可能在根或一级子目录
-        for dir in &extracted_dirs {
-            let skill_dirs = find_skill_dirs(dir);
-            if skill_dirs.is_empty() {
-                result.skipped.push(format!("{:?} 里没找到 SKILL.md", dir));
-                continue;
-            }
-            for sd in skill_dirs {
-                let name_hint = sd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                match install_skill_dir(sd, &skills_dir) {
-                    Ok(name) => result.imported.push(name),
-                    Err(e) => result.errors.push(format!("{name_hint}: {e}")),
+            let extracted_dirs: Vec<std::path::PathBuf> = if lower_name.ends_with(".zip") {
+                extract_zip_to_temp(&p_inner).map_err(|e| format!("解压 zip 失败: {e}"))?
+            } else if lower_name.ends_with(".tar.gz") || lower_name.ends_with(".tgz") {
+                extract_tar_gz_to_temp(&p_inner).map_err(|e| format!("解压 tar.gz 失败: {e}"))?
+            } else if p_inner.is_dir() {
+                vec![p_inner.clone()]
+            } else {
+                return Err(format!("不支持的文件类型: {path_for_closure}（仅支持 .zip / .tar.gz / 文件夹）"));
+            };
+
+            // 进度反馈:开始扫描
+            let _ = app_handle.emit("skill_import_progress", serde_json::json!({
+                "path": path_for_closure, "stage": "scanning", "message": "正在扫描 SKILL.md..."
+            }));
+
+            let total_dirs = extracted_dirs.len();
+            for (dir_idx, dir) in extracted_dirs.iter().enumerate() {
+                let skill_dirs = find_skill_dirs(dir);
+                if skill_dirs.is_empty() {
+                    result.skipped.push(format!("{:?} 里没找到 SKILL.md", dir));
+                    continue;
+                }
+                for sd in skill_dirs {
+                    let name_hint = sd.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let _ = app_handle.emit("skill_import_progress", serde_json::json!({
+                        "path": path_for_closure,
+                        "stage": "installing",
+                        "message": format!(
+                            "({}/{}) 安装 {}",
+                            dir_idx + 1, total_dirs, name_hint
+                        ),
+                    }));
+                    match install_skill_dir(sd.clone(), &skills_dir) {
+                        Ok(name) => result.imported.push(name),
+                        Err(e) => result.errors.push(format!("{name_hint}: {e}")),
+                    }
                 }
             }
-        }
 
-        Ok(result)
+            Ok(result)
+        }
     }).await.map_err(|e| format!("spawn_blocking join error: {e}"))??;
 
-    // reconcile symlinks（在 async 上下文里执行，不阻塞）
+    let _ = app.emit("skill_import_progress", serde_json::json!({
+        "path": path_for_events, "stage": "done", "message": "导入完成"
+    }));
+
+    // reconcile symlinks(在 async 上下文里执行,不阻塞)
+    let storage_ref = state.inner().clone();
     let _ = crate::storage::skills::reconcile_after_change(&storage_ref.storage);
     Ok(result)
 }

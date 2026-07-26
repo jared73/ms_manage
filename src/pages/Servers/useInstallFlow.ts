@@ -42,6 +42,10 @@ export interface UseInstallFlow {
   openConfirm: (pending: McpServer[]) => void;
   closeConfirm: () => void;
   runBatch: (currentPending: McpServer[], reload: () => Promise<void>) => Promise<void>;
+  /** 用户中途放弃 —— 把 batchCancelledRef 置位,runBatch 下一轮迭代不再发起新安装。
+   *  当前进行中那条 install_server / waitForInstallDone 不会突然中断(避免子进程僵死),
+   *  但批会在它返回后结束,reload 一次再总结。 */
+  cancelBatch: () => void;
   dismiss: () => void;
 }
 
@@ -199,6 +203,15 @@ export function useInstallFlow(): UseInstallFlow {
     setBatch((b) => (b && b.done === b.total ? null : b));
   }, []);
 
+  /** 用户中途取消批量安装。
+   * - 设置 ref,runBatch 下一轮迭代会 break
+   * - 当前进行中那条 installServer / waitForInstallDone 仍会跑完子进程
+   *   (避免子进程变成孤儿)—— 只是结束批
+   * - 不会 close 弹窗/dismiss 批状态,留给调用方控制(用户在 UI 上手动 dismiss) */
+  const cancelBatch = useCallback(() => {
+    batchCancelledRef.current = true;
+  }, []);
+
   /** 串行跑批量安装(同一时刻一个,避免 npm/uv 全局锁冲突)。 */
   const runBatch = useCallback(
     async (
@@ -281,6 +294,7 @@ export function useInstallFlow(): UseInstallFlow {
     openConfirm,
     closeConfirm,
     runBatch,
+    cancelBatch,
     dismiss,
   };
 }

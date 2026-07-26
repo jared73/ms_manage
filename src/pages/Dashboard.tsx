@@ -127,7 +127,7 @@ export function Dashboard() {
       {exposedTools.length > 0 && (
         <div className="card space-y-2">
           <button
-            className="flex w-full items-center justify-between text-left"
+            className="flex w-full flex-wrap items-center justify-between gap-y-1 text-left"
             onClick={() => setToolsOpen((o) => !o)}
           >
             <div className="flex items-center gap-2">

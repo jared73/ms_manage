@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search } from "lucide-react";
 import { marked } from "marked";
@@ -369,6 +370,18 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
   const { t } = useTranslation();
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
+  // 后端通过 `skill_import_progress` 事件实时推送当前阶段,
+  // 让用户看到「解压中 → 扫描中 → 安装中 → 完成」而不是只有一个无意义的 spinner。
+  const [stageMsg, setStageMsg] = useState<string>("");
+
+  useEffect(() => {
+    const unlisten = listenSkillImportProgress((p) => {
+      // 在最后一次 `submit` 触发的导入完成前一直累积显示最新阶段信息
+      if (p.stage === "done") setStageMsg(p.message);
+      else setStageMsg(p.message);
+    });
+    return () => { void unlisten.then((fn) => fn()); };
+  }, []);
 
   // 弹出原生文件选择对话框（zip / tar.gz / 目录 都能选）
   const pickFile = async () => {
@@ -395,6 +408,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
   const submit = async () => {
     if (!path.trim()) return;
     setBusy(true);
+    setStageMsg(t("skills.import_stage_start") as string);
     try {
       const r = await importSkillFromPath(path.trim());
       if (r.imported.length > 0) {
@@ -409,6 +423,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
       toast.error(t("skills.import_fail_prefix") as string + describeError(e));
     } finally {
       setBusy(false);
+      setStageMsg("");
     }
   };
   return (
@@ -451,6 +466,16 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
           <p className="mt-1 text-[11px] text-fg-muted">
             {t("skills.import_modal_caption")}
           </p>
+          {busy && stageMsg && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-2 inline-flex items-center gap-2 rounded bg-accent/10 px-2 py-1 text-[11px] text-accent"
+            >
+              <FileSearch size={11} className="animate-pulse" />
+              {stageMsg}
+            </div>
+          )}
         </div>
       </div>
     </Modal>
@@ -689,5 +714,16 @@ function SkillFormModal({ initial, onClose, onSaved }: {
       )}
       <div className="mt-2 text-xs text-fg-muted">{t("skills.frontmatter_hint")}</div>
     </Modal>
+  );
+}
+
+/** 后端 import_skill_from_path 通过 skill_import_progress 事件推送阶段信息。
+ * 返回 unlisten 的 Promise —— 调用方负责 await + cleanup。 */
+function listenSkillImportProgress(
+  onMsg: (p: { path: string; stage: string; message: string }) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<{ path: string; stage: string; message: string }>(
+    "skill_import_progress",
+    (e) => onMsg(e.payload),
   );
 }

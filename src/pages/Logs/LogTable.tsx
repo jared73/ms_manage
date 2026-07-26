@@ -22,10 +22,10 @@ export const LogTable = React.memo(function LogTable({ logs }: { logs: LogEntry[
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-bg-subtle text-left text-xs uppercase text-fg-muted">
             <tr>
-              <th className="w-40 px-3 py-2 font-medium">{t("logs.time")}</th>
-              <th className="w-20 px-3 py-2 font-medium">{t("logs.level")}</th>
-              <th className="w-40 px-3 py-2 font-medium">{t("logs.source")}</th>
-              <th className="px-3 py-2 font-medium">{t("logs.message")}</th>
+              <th scope="col" className="w-40 px-3 py-2 font-medium">{t("logs.time")}</th>
+              <th scope="col" className="w-20 px-3 py-2 font-medium">{t("logs.level")}</th>
+              <th scope="col" className="w-40 px-3 py-2 font-medium">{t("logs.source")}</th>
+              <th scope="col" className="px-3 py-2 font-medium">{t("logs.message")}</th>
             </tr>
           </thead>
           <tbody>

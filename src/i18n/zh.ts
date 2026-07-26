@@ -150,6 +150,9 @@ export default {
     batch_install_no_pending: "没有需要预装的 server",
     batch_install_run_done_ok: "批量安装完成:{{count}} 个 server 已就绪",
     batch_install_run_done_warn: "批量安装完成:{{ok}} 成功,{{fail}} 失败(查看下方进度条)",
+    batch_install_cancelled: "已请求取消 —— 当前 server 装完后会停止",
+    batch_install_cancel_btn: "取消",
+    batch_install_cancel_tooltip: "停止启动后续 server;当前正在装的那条会跑到完(避免子进程变成孤儿)",
     batch_install_progress: "批量安装 {{done}}/{{total}}",
     batch_install_current: "正在装:{{name}}",
     export_btn: "导出 JSON",
@@ -312,6 +315,7 @@ export default {
     import_modal_browse_title: "打开文件选择对话框",
     import_modal_browse: "浏览",
     import_modal_caption: "支持 .zip / .tar.gz / .tgz / 整个文件夹;压缩包/文件夹里任意层级的 SKILL.md 都会被找到",
+    import_stage_start: "准备解压…",
     // AddTargetModal
     add_target_title: "添加集成目标",
     add_target_name_placeholder: "例如 Trae / Kiro / Continue",
@@ -350,13 +354,13 @@ export default {
     revealing: "获取 token 中…",
     intro:
       "把下面这行配置粘到任何 MCP 客户端(Claude Desktop / Cursor / Cline / Continue …)的 mcpServers 里就行。客户端会按需 npx 下载 @ms-manage/cli(约 100 行的 stdio↔HTTP 转发器),转发到本机 MS Manage 的 HTTP 端口。",
-    bullet_no_install: "客户端不需要安装 MS Manage 主程序,只需要能跑 npx(Node.js 14+)",
+    bullet_no_install: "客户端不需要安装 MS Manage 主程序,只需要能跑 npx(Node.js 18+)",
     bullet_running: "MS Manage 必须保持运行(关 GUI = 关代理 = 客户端断连)",
     bullet_cross_platform: "跨平台一致(macOS / Linux / Windows 同一份配置)",
     bullet_shared: "多人可共享同一台 MS Manage 实例",
     prereq_title: "客户端机器需要满足:",
     prereq_node:
-      "已安装 Node.js(14 或更高)。没装的话去 nodejs.org 下载;命令行跑 node -v 能显示版本即 OK。这是最常见的失败原因——机器上根本没有 Node。",
+      "已安装 Node.js(18 或更高)。没装的话去 nodejs.org 下载;命令行跑 node -v 能显示版本即 OK。这是最常见的失败原因——机器上根本没有 Node。",
     prereq_network:
       "首次需联网下载 @ms-manage/cli。国内如果卡在下载,先给 npm 换国内源:npm config set registry https://registry.npmmirror.com",
     prereq_cache:
@@ -436,6 +440,7 @@ export default {
     npm_card_title: "NPM / 镜像源",
     npm_registry_card_desc: "启动 stdio 子 server 时自动注入 NPM_CONFIG_REGISTRY=",
     autostart_card_desc: "系统启动时自动打开 MS Manage（窗口最小化到托盘）",
+    autostart_card_title: "开机自启开关",
     theme_purple: "暗紫",
     theme_midnight: "午夜蓝",
     theme_forest: "护眼绿",

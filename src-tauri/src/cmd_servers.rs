@@ -310,14 +310,17 @@ pub async fn fetch_server_tools(id: String, state: State<'_, Arc<AppState>>) -> 
 }
 
 /// 切换单个工具的启用状态（写进 server.disabled_tools，下次 tools/list 时过滤掉）
+///
+/// 用 `mutate_server` 走 round-trip 持锁路径 —— 之前直接 read → mutate → save
+/// 不持 servers_lock,期间后台 install 写回 installed 字段会丢修改(Lost Update)。
 #[tauri::command]
 pub async fn set_tool_enabled(id: String, tool_name: String, enabled: bool, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
-    let s = list.iter_mut().find(|s| s.id == id).ok_or_else(|| "not found".to_string())?;
-    s.disabled_tools.retain(|t| t != &tool_name);
-    if !enabled { s.disabled_tools.push(tool_name); }
-    s.updated_at = Utc::now().to_rfc3339();
-    state.storage.save_servers(&list).map_err(|e| e.to_string())?;
+    let (found, _) = state.storage.mutate_server(&id, |s| {
+        s.disabled_tools.retain(|t| t != &tool_name);
+        if !enabled { s.disabled_tools.push(tool_name); }
+        true
+    }).map_err(|e| e.to_string())?;
+    if !found { return Err("not found".to_string()); }
     Ok(())
 }
 

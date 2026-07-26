@@ -78,14 +78,15 @@ export function useConnections(): UseConnections {
 
   const reload = useCallback(() => setReloadTick((n) => n + 1), []);
 
-  /** 用户显式点击"显示真实 token"按钮后才调用 —— 真实 token 一进 store 就走。 */
+  /** 用户显式点击"显示真实 token"按钮后才调用 —— 真实 token 一进 store 就走。
+ * 失败时抛出原始错误,UI 才能 toast.error 反馈给用户。 */
   const revealTokenFn = useCallback(async () => {
     try {
       const t = await revealToken();
       setRevealedToken(t);
-    } catch {
+    } catch (e) {
       setRevealedToken(null);
-      // 不 rethrow —— 调用方如果关心可以轮询 revealedToken === null + 长时间如此 → 报错
+      throw e;
     }
   }, []);
 

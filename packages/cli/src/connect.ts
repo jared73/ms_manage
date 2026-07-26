@@ -7,7 +7,7 @@
 
 // 显式用 undici 的 fetch，而不是依赖全局 fetch ——
 // 全局 fetch 在 Node < 18.14 缺失/实验性，会让旧 Node 上一跑就崩（表现为「连不上」）。
-// undici 是本包依赖，Node 16+ 即可用；其 fetch 与全局 fetch 接口一致（body 为 web ReadableStream）。
+// undici 是本包依赖（要求 Node 18+），其 fetch 与全局 fetch 接口一致（body 为 web ReadableStream）。
 import { fetch, type Response } from "undici";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
