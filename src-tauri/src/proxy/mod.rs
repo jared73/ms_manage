@@ -32,11 +32,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::process::Command;
 
+/// SSE session map 上限。local-only 端口本机恶意进程可以无限 GET /mcp/sse,
+/// 没上限就 OOM。加常量上限,connect.rs 收到 insert 失败就 503 + 关流。
+pub(crate) const MAX_SESSIONS: usize = 256;
+/// 单 session 静默超时:超过这个时间没活动就视为 stale,
+/// 后台 cleanup task 每 60s 清一次。
+pub(crate) const SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// 后台 cleanup 周期。
+pub(crate) const SESSION_CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 /// 写一条日志到 AppState.logs（GUI "日志" 页可见）。
 /// 全局可用：proxy 核心、HTTP 连接层、stdio 转发都走这里。
 pub(crate) fn log_event(level: &str, source: &str, message: String, detail: Option<String>) {
@@ -80,67 +88,136 @@ impl ServerStatus {
     }
 }
 
-/// 单个子 MCP server 进程 + 双向 JSON-RPC 帧通道
-pub struct ChildServer {
+/// 单个子 server 的元数据(id/name/tools/next_id/start time)。
+///
+/// 锁策略:`ChildEntry::meta` 用 `parking_lot::RwLock` 持有。
+/// 读多写少:tools 偶发 refresh,next_id 每请求 +1,持锁时间短(纳秒级)。
+pub struct ChildMeta {
     pub id: String,
     pub name: String,
-    pub child: Child,
-    pub stdin: tokio::process::ChildStdin,
-    pub stdout: BufReader<tokio::process::ChildStdout>,
-    /// stderr 在 spawn 后立即被 `drain_stderr` 接管为后台任务；
-    /// 这里保留 Option 让调用方知道 stderr 是否成功接管。
-    pub stderr: Option<tokio::process::ChildStderr>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
     pub tools: Vec<serde_json::Value>, // 缓存 tools/list 结果
     pub next_id: u64,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ChildMeta {
+    pub fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+}
+
+/// 子 server 的 IO 资源(stdin/stdout/pending) + drain 任务 + kill 信号。
+/// 通过 `ChildEntry::io` (`tokio::sync::Mutex<ChildIo>`) 互斥访问,
+/// 只在 tools/call 写入 + 读取响应期间持锁(最多 120s)。
+pub struct ChildIo {
+    pub stdin: tokio::process::ChildStdin,
+    pub stdout: BufReader<tokio::process::ChildStdout>,
+    /// stderr 已被 `drain_stderr` 接管(返回时通过 `kill_tx` 通知退出);
+    /// 这里保留 Option 占位以保持字段一致(`spawn_child` 给 None)。
+    pub stderr: Option<tokio::process::ChildStderr>,
     /// 已经从 stdout 读出但还没匹配的 JSON-RPC 帧缓冲。
     /// 用于过滤 server 在响应前发的 notification / 日志行。
     pub pending: std::collections::VecDeque<String>,
+    pub drain_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 给 `drain_stderr` 用的 kill 信号。
+    /// `Option` 是因为 `kill_and_drain` 在 `let _ = tx.send(())` 时需要 take 走。
+    pub kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-/// 后台消费子进程 stderr 直至 EOF，避免 pipe 满阻塞子进程。
+/// 单个子 MCP server 进程 + 双向 JSON-RPC 帧通道。
+///
+/// 拆分动机:原 `Arc<Mutex<ChildServer>>` 把握住 stdin/stdout 整个 tools/call
+/// 期间(最多 120s),Dashboard `get_exposed_tools` 永远拿不到锁。拆为三段:
+/// - `meta`:读写都轻,`parking_lot::RwLock` 持锁时间短(纳秒级)
+/// - `io`:只在 write+read 期间持锁,响应到了立即释放
+/// - `child`:专用 `Mutex<Child>`,只在 stop 时 `.kill().await`
+pub struct ChildEntry {
+    pub meta: parking_lot::RwLock<ChildMeta>,
+    pub io: tokio::sync::Mutex<ChildIo>,
+    pub child: tokio::sync::Mutex<tokio::process::Child>,
+}
+
+/// 兼容老 API: `child.lock().await` 返回 ChildMeta 读 guard。
+/// `proxy_endpoint.rs` / stdio 早期路径只读 tools/name,无需 IO 锁。
+/// 内部走 `parking_lot::RwLock::read()`,瞬间,支持并发读。
+pub struct ChildMetaGuard<'a> {
+    _guard: parking_lot::RwLockReadGuard<'a, ChildMeta>,
+}
+
+impl std::ops::Deref for ChildMetaGuard<'_> {
+    type Target = ChildMeta;
+    fn deref(&self) -> &ChildMeta { &*self._guard }
+}
+
+impl ChildEntry {
+    /// 兼容老 API: `child.lock().await` -> 读 ChildMeta 字段。
+    /// 实现是 `parking_lot::RwLock::read()` 的 sync 调用,被 async fn 包装
+    /// 以兼容 `.await` 调用约定(body 无 await,Future 立即 Ready)。
+    pub async fn lock(&self) -> ChildMetaGuard<'_> {
+        ChildMetaGuard { _guard: self.meta.read() }
+    }
+}
+
+/// 后台消费子进程 stderr 直至 EOF / kill 信号，避免 pipe 满阻塞子进程。
 /// 行级日志只在 RUST_LOG/MS_MANAGE_DEBUG 下输出。
 ///
 /// 安全/性能考虑:
 /// - 截断单行 4 KB —— npm/uv install 失败时经常一行 stack trace 几百 KB,
 ///   不截断会塞满 state.storage.logs 5000 容量,挤掉用户的关键日志。
 /// - 检测 binary / 不可打印字符(除 \t)→ 记为 "binary blob, N bytes" 不写原文。
-fn drain_stderr(label: String, stderr: tokio::process::ChildStderr) {
+/// - `kill_rx` 触发时立即退出循环,配合 `stop_all` 快速回收后台任务。
+fn drain_stderr(
+    label: String,
+    stderr: tokio::process::ChildStderr,
+    mut kill_rx: tokio::sync::oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
     const MAX_LINE_BYTES: usize = 4 * 1024;
     tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut reader = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            if line.is_empty() {
-                continue;
+        loop {
+            tokio::select! {
+                // 优先级:kill 信号一到立即退出,不等下一次 I/O 唤醒。
+                _ = &mut kill_rx => break,
+                line = reader.next_line() => {
+                    match line {
+                        Ok(Some(line)) => {
+                            if line.is_empty() {
+                                continue;
+                            }
+                            // 单行超长截断 + 标注被截掉的字节数
+                            let (summary, original_len) = if line.len() > MAX_LINE_BYTES {
+                                let cut = line.floor_char_boundary(MAX_LINE_BYTES);
+                                // 找出 floor_char_boundary 后的字节数,做到 floor_char_boundary 对 UTF-8 安全
+                                let drop = line.len() - cut;
+                                (format!("{}…[+{} bytes]", &line[..cut], drop), line.len())
+                            } else {
+                                (line.clone(), line.len())
+                            };
+                            // 检测 binary:控制字符(0..=31 除 \t)+ 0x7f 都算不可打印。
+                            // 一些 npm 输出的 ANSI 转义常带 \x1b[,但日志染色通常只占头几个字符,
+                            // 整体仍可读 —— 所以只有「不可打印字符占比 > 10%」时才当作 binary。
+                            let non_printable = summary
+                                .bytes()
+                                .filter(|b| b < &0x20 && b != &b'\t' || *b == 0x7f)
+                                .count();
+                            let printable = if original_len == 0 { 1 } else { original_len };
+                            if non_printable * 10 > printable {
+                                eprintln!(
+                                    "[mcp:{label}!] [binary stderr skipped, {} bytes]",
+                                    original_len
+                                );
+                                continue;
+                            }
+                            eprintln!("[mcp:{label}!] {summary}");
+                        }
+                        _ => break,
+                    }
+                }
             }
-            // 单行超长截断 + 标注被截掉的字节数
-            let (summary, original_len) = if line.len() > MAX_LINE_BYTES {
-                let cut = line.floor_char_boundary(MAX_LINE_BYTES);
-                // 找出 floor_char_boundary 后的字节数,做到 floor_char_boundary 对 UTF-8 安全
-                let drop = line.len() - cut;
-                (format!("{}…[+{} bytes]", &line[..cut], drop), line.len())
-            } else {
-                (line.clone(), line.len())
-            };
-            // 检测 binary:控制字符(0..=31 除 \t)+ 0x7f 都算不可打印。
-            // 一些 npm 输出的 ANSI 转义常带 \x1b[,但日志染色通常只占头几个字符,
-            // 整体仍可读 —— 所以只有「不可打印字符占比 > 10%」时才当作 binary。
-            let non_printable = summary
-                .bytes()
-                .filter(|b| b < &0x20 && b != &b'\t' || *b == 0x7f)
-                .count();
-            let printable = if original_len == 0 { 1 } else { original_len };
-            if non_printable * 10 > printable {
-                eprintln!(
-                    "[mcp:{label}!] [binary stderr skipped, {} bytes]",
-                    original_len
-                );
-                continue;
-            }
-            eprintln!("[mcp:{label}!] {summary}");
         }
-    });
+    })
 }
 
 /// 从子 server 读取一行 JSON-RPC，过滤掉无 id 的 notification / 日志行。
@@ -182,45 +259,43 @@ async fn read_response_line(
     }
 }
 
-/// 同 read_response_line，但接受 ChildServer 并按引用一次性借用 stdout + pending。
+/// 同 read_response_line，但接受 ChildIo 并按引用一次性借用 stdout + pending。
+///
+/// 三个返回路径(语义不变):
+/// - `Ok(Some((id, json)))` —— 正常拿到带 id 的帧
+/// - `Ok(None)` —— 子进程已关闭(EOF)
+/// - `Err(io::Error)` of `TimedOut` —— 读取超时
 async fn read_response_from_child(
-    srv: &mut ChildServer,
+    io: &mut ChildIo,
     timeout: std::time::Duration,
 ) -> std::io::Result<Option<(serde_json::Value, serde_json::Value)>> {
-    read_response_line(&mut srv.stdout, &mut srv.pending, timeout).await
-}
-
-impl ChildServer {
-    pub fn next_id(&mut self) -> u64 {
-        self.next_id += 1;
-        self.next_id
-    }
+    read_response_line(&mut io.stdout, &mut io.pending, timeout).await
 }
 
 pub struct ServerRegistry {
-    inner: Mutex<HashMap<String, Arc<Mutex<ChildServer>>>>,
+    inner: tokio::sync::Mutex<HashMap<String, Arc<ChildEntry>>>,
 }
 
 impl Default for ServerRegistry {
-    fn default() -> Self { Self { inner: Mutex::new(HashMap::new()) } }
+    fn default() -> Self { Self { inner: tokio::sync::Mutex::new(HashMap::new()) } }
 }
 
 impl ServerRegistry {
-    pub async fn insert(&self, id: String, srv: ChildServer) -> Arc<Mutex<ChildServer>> {
-        let arc = Arc::new(Mutex::new(srv));
+    pub async fn insert(&self, id: String, entry: ChildEntry) -> Arc<ChildEntry> {
+        let arc = Arc::new(entry);
         self.inner.lock().await.insert(id, arc.clone());
         arc
     }
-    pub async fn remove(&self, id: &str) -> Option<Arc<Mutex<ChildServer>>> {
+    pub async fn remove(&self, id: &str) -> Option<Arc<ChildEntry>> {
         self.inner.lock().await.remove(id)
     }
-    pub async fn get(&self, id: &str) -> Option<Arc<Mutex<ChildServer>>> {
+    pub async fn get(&self, id: &str) -> Option<Arc<ChildEntry>> {
         self.inner.lock().await.get(id).cloned()
     }
     pub async fn list_ids(&self) -> Vec<String> {
         self.inner.lock().await.keys().cloned().collect()
     }
-    pub async fn list(&self) -> Vec<Arc<Mutex<ChildServer>>> {
+    pub async fn list(&self) -> Vec<Arc<ChildEntry>> {
         self.inner.lock().await.values().cloned().collect()
     }
 }
@@ -234,10 +309,21 @@ pub fn registry() -> Arc<ServerRegistry> { REGISTRY.clone() }
 /// SSE session 路由：每个 SSE 长连接对应一个 session_id，
 /// POST 时带 ?session_id=xxx 的请求会把响应发回对应的 SSE 流上
 /// （这是 legacy SSE transport 的要求，Qoder 之类的客户端走这条路）。
-type SessionTx = tokio::sync::mpsc::UnboundedSender<String>;
+///
+/// 容量治理:
+/// - **MAX_SESSIONS** 上限 —— 满后 `insert` 返回 `Err`,调用方 503 + 关流。
+/// - **每 session mpsc channel(64)** —— buffer 不深,backpressure 让客户端自然受限。
+/// - **last_seen_at** —— send 时更新;后台 cleanup task 每 60s 清超过
+///   `SESSION_IDLE_TIMEOUT` (5min) 没活动的 session。
+type SessionTx = tokio::sync::mpsc::Sender<String>;
 
 pub struct SessionRegistry {
-    inner: tokio::sync::Mutex<std::collections::HashMap<String, SessionTx>>,
+    inner: tokio::sync::Mutex<std::collections::HashMap<String, SessionEntry>>,
+}
+
+struct SessionEntry {
+    tx: SessionTx,
+    last_seen_at: std::sync::Mutex<Instant>,
 }
 
 impl Default for SessionRegistry {
@@ -245,20 +331,47 @@ impl Default for SessionRegistry {
 }
 
 impl SessionRegistry {
-    pub async fn insert(&self, id: String, tx: SessionTx) {
-        self.inner.lock().await.insert(id, tx);
+    /// 插入新 session。map 已满返回 `Err(id)`,调用方 503 + 拒绝。
+    pub async fn insert(&self, id: String, tx: SessionTx) -> Result<(), String> {
+        let mut guard = self.inner.lock().await;
+        if guard.len() >= MAX_SESSIONS {
+            return Err(id);
+        }
+        guard.insert(id, SessionEntry { tx, last_seen_at: std::sync::Mutex::new(Instant::now()) });
+        Ok(())
     }
     pub async fn remove(&self, id: &str) -> Option<SessionTx> {
-        self.inner.lock().await.remove(id)
+        self.inner.lock().await.remove(id).map(|e| e.tx)
     }
     pub async fn send(&self, id: &str, msg: String) -> bool {
-        if let Some(tx) = self.inner.lock().await.get(id) {
-            return tx.send(msg).is_ok();
+        let guard = self.inner.lock().await;
+        if let Some(entry) = guard.get(id) {
+            // 先更新时间戳 —— 即使 send 失败也记,防止对端已经断开但我们还在 retry 续命。
+            // 失败路径表示 channel 已满(client 不消费),这种情况视作"还在通信"
+            // (只是客户端背压),所以仍然更新 last_seen_at。
+            if let Ok(mut t) = entry.last_seen_at.lock() {
+                *t = Instant::now();
+            }
+            return entry.tx.try_send(msg).is_ok();
         }
         false
     }
     pub async fn has(&self, id: &str) -> bool {
         self.inner.lock().await.contains_key(id)
+    }
+    /// 后台 cleanup 用:拿当前所有 session 的 (id, last_seen) 快照。
+    /// 调用方根据 time_since 比 SESSION_IDLE_TIMEOUT 决定要不要 remove。
+    async fn snapshot(&self) -> Vec<(String, Instant)> {
+        self.inner
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(id, e)| e.last_seen_at.lock().ok().map(|t| (id.clone(), *t)))
+            .collect()
+    }
+    /// 后台 cleanup 用:删除指定 id 的 session(同时关 tx 让连接 task 退出)。
+    async fn reap(&self, id: &str) -> bool {
+        self.inner.lock().await.remove(id).is_some()
     }
 }
 
@@ -267,8 +380,37 @@ static SESSIONS: once_cell::sync::Lazy<Arc<SessionRegistry>> =
 
 pub fn sessions() -> Arc<SessionRegistry> { SESSIONS.clone() }
 
+/// 启动 SSE session 的后台清理 task:每 60s 扫描一次,清掉 5min 没活动的 session。
+/// 在第一次 `sessions()` 调用时 lazy 启动一次(由 `serve_sse_session` 触发即可)。
+pub fn spawn_session_cleanup() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(SESSION_CLEANUP_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let reg = sessions();
+                let stale: Vec<String> = reg
+                    .snapshot()
+                    .await
+                    .into_iter()
+                    .filter_map(|(id, last)| {
+                        if last.elapsed() >= SESSION_IDLE_TIMEOUT { Some(id) } else { None }
+                    })
+                    .collect();
+                for id in stale {
+                    if reg.reap(&id).await {
+                        eprintln!("[ms-manage] SSE session stale ({} min idle), closed", SESSION_IDLE_TIMEOUT.as_secs() / 60);
+                    }
+                }
+            }
+        });
+    });
+}
+
 /// 启动一个 stdio 子 MCP server 进程
-pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildServer>>> {
+pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<ChildEntry>> {
     if srv.transport != "stdio" {
         anyhow::bail!("proxy currently only supports stdio children, got '{}'", srv.transport);
     }
@@ -327,25 +469,32 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
     let stderr = child.stderr.take();
     // 立即接管 stderr 到后台 drain，否则大量 banner/日志会撑满 pipe 阻塞子进程。
-    if let Some(se) = stderr {
-        drain_stderr(srv.name.clone(), se);
-    }
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+    let drain_handle = stderr.map(|se| drain_stderr(srv.name.clone(), se, kill_rx));
 
-    let mut child_srv = ChildServer {
+    let meta = ChildMeta {
         id: srv.id.clone(),
         name: srv.name.clone(),
-        child,
+        tools: Vec::new(),
+        next_id: 0,
+        started_at: chrono::Utc::now(),
+    };
+    let io = ChildIo {
         stdin,
         stdout: BufReader::new(stdout),
         stderr: None, // 已被 drain_stderr 接管
-        started_at: chrono::Utc::now(),
-        tools: Vec::new(),
-        next_id: 0,
         pending: std::collections::VecDeque::new(),
+        drain_handle,
+        kill_tx: Some(kill_tx),
+    };
+    let entry = ChildEntry {
+        meta: parking_lot::RwLock::new(meta),
+        io: tokio::sync::Mutex::new(io),
+        child: tokio::sync::Mutex::new(child),
     };
 
     // initialize handshake
-    let init_id_num = child_srv.next_id();
+    let init_id_num = entry.meta.write().next_id();
     let init_req = serde_json::json!({
         "jsonrpc": "2.0", "id": init_id_num, "method": "initialize",
         "params": {
@@ -354,10 +503,16 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
             "clientInfo": { "name": "ms-manage-proxy", "version": env!("CARGO_PKG_VERSION") }
         }
     });
-    child_srv.stdin.write_all(format!("{}\n", init_req).as_bytes()).await?;
-    child_srv.stdin.flush().await?;
+    {
+        let mut io = entry.io.lock().await;
+        io.stdin.write_all(format!("{}\n", init_req).as_bytes()).await?;
+        io.stdin.flush().await?;
+    }
     let init_id = serde_json::json!(init_id_num);
-    let read = read_response_from_child(&mut child_srv, std::time::Duration::from_secs(15)).await;
+    let read = {
+        let mut io = entry.io.lock().await;
+        read_response_from_child(&mut io, std::time::Duration::from_secs(15)).await
+    };
     match read {
         Ok(Some((id, _))) if id == init_id => {} // ok
         Ok(Some((id, _))) => anyhow::bail!("initialize 响应 id 不匹配：期望 {init_id}，实际 {id}"),
@@ -372,28 +527,38 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<Mutex<ChildSe
     let notif = serde_json::json!({
         "jsonrpc": "2.0", "method": "notifications/initialized"
     });
-    child_srv.stdin.write_all(format!("{}\n", notif).as_bytes()).await?;
-    child_srv.stdin.flush().await?;
+    {
+        let mut io = entry.io.lock().await;
+        io.stdin.write_all(format!("{}\n", notif).as_bytes()).await?;
+        io.stdin.flush().await?;
+    }
 
     // 拉取 tools/list 缓存
-    let list_id_num = child_srv.next_id();
+    let list_id_num = entry.meta.write().next_id();
     let list_req = serde_json::json!({
         "jsonrpc": "2.0", "id": list_id_num, "method": "tools/list", "params": {}
     });
-    child_srv.stdin.write_all(format!("{}\n", list_req).as_bytes()).await?;
-    child_srv.stdin.flush().await?;
+    {
+        let mut io = entry.io.lock().await;
+        io.stdin.write_all(format!("{}\n", list_req).as_bytes()).await?;
+        io.stdin.flush().await?;
+    }
     let list_id = serde_json::json!(list_id_num);
-    if let Ok(Some((id, v))) = read_response_from_child(&mut child_srv, std::time::Duration::from_secs(15)).await {
+    let read = {
+        let mut io = entry.io.lock().await;
+        read_response_from_child(&mut io, std::time::Duration::from_secs(15)).await
+    };
+    if let Ok(Some((id, v))) = read {
         if id == list_id {
             if let Some(tools) = v.get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array()) {
-                child_srv.tools = tools.clone();
+                entry.meta.write().tools = tools.clone();
             }
         }
     }
 
     let id = srv.id.clone();
-    let tool_count = child_srv.tools.len();
-    let arc = registry().insert(id, child_srv).await;
+    let tool_count = entry.meta.read().tools.len();
+    let arc = registry().insert(id, entry).await;
     log_event("info", "server", format!("server「{}」已启动（{} 个工具）", srv.name, tool_count), None);
     Ok(arc)
 }
@@ -407,12 +572,16 @@ fn inject_npm_registry(c: &mut Command, user_env: &HashMap<String, String>) {
 }
 
 /// 关闭所有子进程
+///
+/// 严格按顺序释放锁,避免持锁链:
+/// 1. `entry.child.lock().await` —— `.kill().await` 异步,持锁到子进程退出
+/// 2. `entry.io.lock().await` —— drain_handle.await 后 kill_tx.send(())
+/// 3. `entry.meta.read()` —— 读 name
 pub async fn stop_all() {
     let ids = registry().list_ids().await;
     for id in ids {
-        if let Some(srv) = registry().remove(&id).await {
-            let mut s = srv.lock().await;
-            let _ = s.child.kill().await;
+        if let Some(entry) = registry().remove(&id).await {
+            kill_and_drain(&entry).await;
         }
     }
     if let Some(st) = crate::state::try_current() {
@@ -424,14 +593,33 @@ pub async fn stop_all() {
 
 /// 关闭单个子 server（按 id）
 pub async fn stop(id: &str) {
-    if let Some(srv) = registry().remove(id).await {
-        let mut s = srv.lock().await;
-        let name = s.name.clone();
-        let _ = s.child.kill().await;
+    if let Some(entry) = registry().remove(id).await {
+        let name = entry.meta.read().name.clone();
+        kill_and_drain(&entry).await;
         log_event("info", "server", format!("server「{name}」已停止"), None);
     }
     if let Some(st) = crate::state::try_current() {
         st.storage.live_states.write().insert(id.to_string(), ServerStatus::Stopped.as_str().to_string());
+    }
+}
+
+/// 关闭一个 ChildEntry 的子进程 + 回收 IO 资源。
+/// 抽取出来避免 stop_all / stop 两处重复。
+async fn kill_and_drain(entry: &Arc<ChildEntry>) {
+    // 1. kill 子进程(等到 OS 真正回收),子进程关闭后 stderr 的 pipe 自然 EOF,
+    //    drain_stderr 任务读到 Ok(None) 后退出 — 但我们同时主动 signal 让它更快退出。
+    {
+        let mut c = entry.child.lock().await;
+        let _ = c.kill().await;
+    }
+    // 2. 通知 drain 任务 + join 它的 handle;kill_tx 失败说明接收端已退出(正常),
+    //    drain_handle 没东西可 join 时直接跳过。kill_tx 只能 take 一次,所以 Option。
+    let mut io = entry.io.lock().await;
+    if let Some(tx) = io.kill_tx.take() {
+        let _ = tx.send(());
+    }
+    if let Some(h) = io.drain_handle.take() {
+        let _ = h.await;
     }
 }
 
@@ -478,7 +666,10 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     let mut stdin = c.stdin.take().ok_or_else(|| "no stdin".to_string())?;
     let stdout = c.stdout.take().ok_or_else(|| "no stdout".to_string())?;
     if let Some(se) = c.stderr.take() {
-        drain_stderr(s.name.clone(), se);
+        // fetch_tools 用完即弃,无需 kill 信号 — 返回一个会让 kill_rx 永远等不到的
+        // receiver, drain_stderr 任务在 EOF 时自然退出,但 kill_rx 那个分支永远不会被 poll。
+        let (_kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+        drain_stderr(s.name.clone(), se, kill_rx);
     }
     let mut reader = BufReader::new(stdout);
     let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
@@ -573,7 +764,9 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     let mut stdin = c.stdin.take().ok_or_else(|| "stdin".to_string())?;
     let stdout = c.stdout.take().ok_or_else(|| "stdout".to_string())?;
     if let Some(se) = c.stderr.take() {
-        drain_stderr(s.name.clone(), se);
+        // test() 用完即弃,无需 kill 信号(drain 在 EOF 时自然退出)。
+        let (_kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+        drain_stderr(s.name.clone(), se, kill_rx);
     }
     let mut reader = BufReader::new(stdout);
     let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();

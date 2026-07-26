@@ -122,10 +122,11 @@ async fn handle_tools_list(storage: &Storage, id: Option<Value>) -> Option<Value
         }
         // 只处理已在 registry 中的 server（用户手动启动的）
         if let Some(child) = reg.get(&s.id).await {
-            let srv = child.lock().await;
+            // 只读 meta.tools(瞬间持锁,纳秒级),不阻塞 io 锁。
+            let meta = child.meta.read();
             // iter() 而非 drain(..) —— 客户端会反复调 tools/list，
             // drain 会把缓存清空，第二次起就拿不到工具了
-            for tool in srv.tools.iter() {
+            for tool in meta.tools.iter() {
                 let mut t = tool.clone();
                 if let Some(obj) = t.as_object_mut() {
                     let orig = obj.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
@@ -164,26 +165,30 @@ async fn handle_tools_call(storage: &Storage, id: Option<Value>, params: Value) 
         Some(c) => c,
         None => return jsonrpc_error(id, -32603, format!("server '{server_name}' is not running, please start it first")),
     };
-    let mut child = child.lock().await;
-    let call_id = child.next_id();
+    // 锁粒度拆开: meta.write() 拿 id(瞬时), io.lock().await 写读管道(stdio 模式下
+    // 保证同 server 调用串行,但不会卡 Dashboard 读 tools)。
+    let call_id = {
+        let mut m = child.meta.write();
+        m.next_id()
+    };
     let req = serde_json::json!({
         "jsonrpc": "2.0", "id": call_id,
         "method": "tools/call",
         "params": { "name": tool_name, "arguments": arguments }
     });
-    use tokio::io::AsyncWriteExt;
-    if let Err(e) = child.stdin.write_all(format!("{}\n", req).as_bytes()).await {
-        return jsonrpc_error(id, -32603, format!("write to {server_name}: {e}"));
-    }
-    if let Err(e) = child.stdin.flush().await {
-        return jsonrpc_error(id, -32603, format!("flush {server_name}: {e}"));
-    }
+    let read = {
+        let mut io = child.io.lock().await;
+        use tokio::io::AsyncWriteExt;
+        if let Err(e) = io.stdin.write_all(format!("{}\n", req).as_bytes()).await {
+            return jsonrpc_error(id, -32603, format!("write to {server_name}: {e}"));
+        }
+        if let Err(e) = io.stdin.flush().await {
+            return jsonrpc_error(id, -32603, format!("flush {server_name}: {e}"));
+        }
 
-    // 读取响应（带超时）。过滤掉子 server 在响应前发的 notification / 日志行。
-    let read = super::read_response_from_child(
-        &mut child,
-        std::time::Duration::from_secs(120),
-    ).await;
+        // 读取响应（带超时）。过滤掉子 server 在响应前发的 notification / 日志行。
+        super::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await
+    };
     match read {
         Ok(Some((_id, mut v))) => {
             // 把子 server 的 id 替换成 client 的 id

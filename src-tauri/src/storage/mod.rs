@@ -197,6 +197,63 @@ pub struct SkillTarget {
 
 fn default_npm_registry() -> String { "https://registry.npmmirror.com".to_string() }
 
+/// 从损坏的 settings.json raw 文本里启发式挖 `mcp_token` 字段。
+///
+/// 设计取舍：**不引入 regex crate**，手写一个最小字符串扫描：
+/// 1. 找到 `"mcp_token"` 字段名（允许引号内侧带/不带空格）；
+/// 2. 跳过 `:` 和空白；
+/// 3. 找到第一个 `"` 作为值起点；
+/// 4. 处理 `\"` 转义,扫描到下一个未转义的 `"` 作为值终点。
+///
+/// 返回 `Some(token)` 表示挖到了非空 token;`None` 表示找不到或 token 为空。
+///
+/// 即使文件后半段被截断,只要 `mcp_token` 字段本体没坏,就能抢救。
+fn recover_mcp_token(raw: &str) -> Option<String> {
+    // 定位字段名 —— 兼容 `"mcp_token"` 与 `"mcp_token" ` 之类写法
+    let key = "\"mcp_token\"";
+    let key_pos = raw.find(key)?;
+    let mut i = key_pos + key.len();
+    let bytes = raw.as_bytes();
+    // 跳过 : 与空白
+    while i < bytes.len() && (bytes[i] == b':' || bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    // 期望下一个非空白字符是 `"`,否则当作结构异常,放弃
+    if i >= bytes.len() || bytes[i] != b'"' {
+        return None;
+    }
+    i += 1;
+    let value_start = i;
+    let mut out = String::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' && i + 1 < bytes.len() {
+            // 处理 `\"` 与 `\\` 两种最小集(我们的 token 只含 ASCII,实际不会触达,
+            // 但写出来保证扫描不溢出)。其他转义保留字面下一个字符。
+            let next = bytes[i + 1];
+            out.push(next as char);
+            i += 2;
+            continue;
+        }
+        if b == b'"' {
+            // 字段值结束
+            if out.is_empty() {
+                return None;
+            }
+            return Some(out);
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    // 跑到 raw 末尾都没找到收尾 `"` —— 文件被截断,接受已收集的部分,
+    // 只要非空也返回(优先抢救,避免截断场景下白白重置 token)。
+    if value_start < i && !out.is_empty() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 pub fn generate_token() -> String {
     use rand::Rng;
     let bytes: [u8; 24] = rand::thread_rng().gen();
@@ -294,6 +351,11 @@ pub struct Storage {
     /// 每次都 fs::read+serde_json::from_str+可能的原子写,既慢又有并发风险。
     /// 第一次 load 时落盘,后续命中缓存;save 时 invalidate 一次。
     pub settings_cache: Arc<RwLock<Option<StoredSettings>>>,
+    /// servers.json 内存缓存 —— `tools/list` 热路径每次都调 `load_servers()`,
+    /// Claude Desktop / Cursor / Cline 这类客户端秒级高频调用,每次 fs::read+from_str
+    /// 会成为瓶颈。跟 settings_cache 同模式:命中直接 clone,没命中才读盘 + 解析,
+    /// mutate/upsert/remove 写盘后 invalidate + 重 load 回填。
+    pub servers_cache: Arc<RwLock<Option<Vec<StoredServer>>>>,
 }
 
 impl Storage {
@@ -308,6 +370,7 @@ impl Storage {
             servers_lock: Arc::new(RwLock::new(())),
             projects_lock: Arc::new(RwLock::new(())),
             settings_cache: Arc::new(RwLock::new(None)),
+            servers_cache: Arc::new(RwLock::new(None)),
         };
         // 一次性把老的单 .md skill 迁移到目录制
         skills::migrate_legacy_flat_files(&storage.skills_dir()).ok();
@@ -331,12 +394,25 @@ impl Storage {
     pub fn log_file(&self) -> PathBuf { self.root.join("logs.json") }
 
     pub fn load_servers(&self) -> Result<Vec<StoredServer>> {
+        // 命中缓存就直接 clone 返回 —— 代理 tools/list 热路径(秒级高频)不再走 IO。
+        {
+            let cache = self.servers_cache.read();
+            if let Some(list) = cache.as_ref() {
+                return Ok(list.clone());
+            }
+        }
         let _guard = self.servers_lock.read();
-        servers::load(&self.servers_file())
+        let list = servers::load(&self.servers_file())?;
+        *self.servers_cache.write() = Some(list.clone());
+        Ok(list)
     }
     pub fn save_servers(&self, list: &[StoredServer]) -> Result<()> {
         let _guard = self.servers_lock.write();
-        servers::save(&self.servers_file(), list)
+        servers::save(&self.servers_file(), list)?;
+        // 写盘后同步缓存,保持单一真相 —— 后续 load_servers 直接命中缓存,
+        // 避免下一次 tools/list 又重新读盘。
+        *self.servers_cache.write() = Some(list.to_vec());
+        Ok(())
     }
 
     /// 原子地 读-改-写 单条 server 记录：整个过程持有写锁，
@@ -360,6 +436,10 @@ impl Storage {
             slot.updated_at = chrono::Utc::now().to_rfc3339();
             servers::save(&self.servers_file(), &list)?;
         }
+        // 写盘后写穿缓存 —— 即使 changed=false 也重置,保证缓存与磁盘一致
+        // (changed=false 时 list 是从磁盘 load 的最新值,缓存里可能是旧值,
+        // 会与其他写路径冲突),此处保持单一真相。
+        *self.servers_cache.write() = Some(list);
         Ok((true, changed))
     }
 
@@ -369,16 +449,18 @@ impl Storage {
     pub fn upsert_server(&self, server: &StoredServer) -> Result<bool> {
         let _guard = self.servers_lock.write();
         let mut list = servers::load(&self.servers_file())?;
+        let updated;
         if let Some(slot) = list.iter_mut().find(|s| s.id == server.id) {
             *slot = server.clone();
             slot.updated_at = chrono::Utc::now().to_rfc3339();
-            servers::save(&self.servers_file(), &list)?;
-            Ok(true)
+            updated = true;
         } else {
             list.push(server.clone());
-            servers::save(&self.servers_file(), &list)?;
-            Ok(false)
+            updated = false;
         }
+        servers::save(&self.servers_file(), &list)?;
+        *self.servers_cache.write() = Some(list);
+        Ok(updated)
     }
 
     /// 原子地删除一条 server 记录。
@@ -387,6 +469,7 @@ impl Storage {
         let mut list = servers::load(&self.servers_file())?;
         list.retain(|s| s.id != id);
         servers::save(&self.servers_file(), &list)?;
+        *self.servers_cache.write() = Some(list);
         Ok(())
     }
 
@@ -463,7 +546,33 @@ impl Storage {
                     "[storage] settings.json 解析失败（{}），已备份到 {}，使用默认设置重新生成",
                     e, corrupt.display()
                 );
-                StoredSettings { mcp_token: None, ..StoredSettings::default() }
+                // 尝试从损坏的 raw 文本里把 mcp_token 挖出来 —— 解析失败的常见场景
+                // 是文件被截断/部分损坏,但 mcp_token 字段本身还在。如果能挖到,
+                // 就保留它,避免所有客户端失联 401。
+                let recovered = recover_mcp_token(&raw);
+                if let Some(tok) = recovered.as_deref() {
+                    crate::proxy::log_event(
+                        "info",
+                        "storage",
+                        "recovered mcp_token from corrupt settings.json".to_string(),
+                        None,
+                    );
+                    StoredSettings {
+                        mcp_token: Some(tok.to_string()),
+                        ..StoredSettings::default()
+                    }
+                } else {
+                    crate::proxy::log_event(
+                        "error",
+                        "storage",
+                        "mcp_token was reset due to corrupt settings.json; all clients must update their config".to_string(),
+                        None,
+                    );
+                    StoredSettings {
+                        mcp_token: None,
+                        ..StoredSettings::default()
+                    }
+                }
             }
         };
         // 主题向后兼容：dark/system/未知 → purple，light → light

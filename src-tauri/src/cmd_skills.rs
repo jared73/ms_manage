@@ -117,14 +117,18 @@ pub fn upsert_skill(skill: serde_json::Value, state: State<'_, Arc<AppState>>) -
     s.updated_at = now;
     state.storage.save_skill(&s).map_err(|e| e.to_string())?;
     // 保存后立即 reconcile symlink
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(from_stored(&s))
 }
 
 #[tauri::command]
 pub fn delete_skill(id: String, state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.storage.delete_skill(&id).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(())
 }
 
@@ -174,7 +178,9 @@ pub fn toggle_skill(id: String, enabled: bool, state: State<'_, Arc<AppState>>) 
     s.enabled = enabled;
     s.updated_at = Utc::now().to_rfc3339();
     state.storage.save_skill(&s).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(())
 }
 
@@ -206,7 +212,9 @@ pub fn toggle_skill_target(id: String, enabled: bool, state: State<'_, Arc<AppSt
     }
     if !found { return Err(format!("target {id} not found")); }
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(())
 }
 
@@ -226,7 +234,9 @@ pub fn add_skill_target(name: String, path: String, state: State<'_, Arc<AppStat
     };
     settings.skill_targets.push(target.clone());
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(SkillTargetDto { id: target.id, name: target.name, path: target.path, enabled: target.enabled, builtin: target.builtin })
 }
 
@@ -239,7 +249,9 @@ pub fn remove_skill_target(id: String, state: State<'_, Arc<AppState>>) -> Resul
         return Err(format!("target {id} not found"));
     }
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(())
 }
 
@@ -263,7 +275,9 @@ pub fn update_skill_target(id: String, name: Option<String>, path: Option<String
     }
     if !found { return Err(format!("target {id} not found")); }
     state.storage.save_settings(&settings).map_err(|e| e.to_string())?;
-    let _ = crate::storage::skills::reconcile_after_change(&state.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能变更后同步失败：{e}"), None);
+    }
     Ok(())
 }
 
@@ -377,7 +391,9 @@ pub async fn import_skill_from_path(
 
     // reconcile symlinks(在 async 上下文里执行,不阻塞)
     let storage_ref = state.inner().clone();
-    let _ = crate::storage::skills::reconcile_after_change(&storage_ref.storage);
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&storage_ref.storage) {
+        crate::proxy::log_event("error", "skills", format!("技能导入后同步失败：{e}"), None);
+    }
     Ok(result)
 }
 

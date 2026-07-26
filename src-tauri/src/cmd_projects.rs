@@ -60,10 +60,12 @@ pub fn delete_project(id: String, state: State<'_, Arc<AppState>>) -> Result<(),
     state.storage.remove_project(&id).map_err(|e| e.to_string())?;
     // 级联：把 server 的 project_id 重置为 None（移到「未分组」）
     for sid in state.storage.load_servers().map_err(|e| e.to_string())?.iter().filter(|s| s.project_id.as_deref() == Some(&id)).map(|s| s.id.clone()) {
-        let _ = state.storage.mutate_server(&sid, |srv| {
+        if let Err(e) = state.storage.mutate_server(&sid, |srv| {
             srv.project_id = None;
             true
-        });
+        }) {
+            crate::proxy::log_event("error", "projects", format!("级联移除 server {sid} 的项目归属失败：{e}"), None);
+        }
     }
     Ok(())
 }

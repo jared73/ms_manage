@@ -57,11 +57,10 @@ pub async fn run_http_with_ready(
     if let Some(tx) = ready {
         let _ = tx.send(Ok(port));
     }
-    let initial_token = state.storage.load_settings()
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .mcp_token
-        .clone()
-        .unwrap_or_default();
+    let initial_token = {
+        let guard = state.cached_token.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0.clone()
+    };
     eprintln!("[ms-manage] HTTP MCP proxy listening on http://{local:?}");
     // token 前 8 位只用于开发/调试期核对 —— release build 完全禁止打印
     #[cfg(debug_assertions)]
@@ -152,15 +151,28 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
     }
 
     let auth = headers.get("authorization").cloned().unwrap_or_default();
-    let expected_token = state.storage.load_settings()
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .mcp_token
-        .clone()
-        .unwrap_or_default();
+    // 一次性原子读 (token, generation) ——
+    // 旧实现是分两次:先 `cached_token_generation.load(Acquire)` 再 `cached_token.lock()`,
+    // Relaxed/Acquire 配对下可能看到「gen 已 +1 但 token 还是旧值」racing 窗口,
+    // 导致 handler 误判 token 验不过。绑成 tuple 后,锁内一次性 clone,无窗口:
+    // 写入者必须等所有 reader(包括这里)释放锁之后才能进入,
+    // 所以这里的 tuple 总是要么全旧、要么全新。
+    let (_token_generation, expected_token) = {
+        let guard = state.cached_token.lock().unwrap_or_else(|e| e.into_inner());
+        (guard.1, guard.0.clone())
+    };
     // 空 token 视为未配置：直接拒绝所有需要鉴权的请求，
     // 避免 settings 里 mcp_token="" 时任何人都能裸连。
-    let bearer_ok = !expected_token.is_empty() && auth == format!("Bearer {expected_token}");
-    let query_ok = !expected_token.is_empty() && !query_token.is_empty() && query_token == expected_token;
+    // 用 ct_eq 做常量时间比较 —— 防止本机端通过响应时间差逐字节嗅探 token。
+    let expected_bytes = expected_token.as_bytes();
+    let bearer_ok = !expected_token.is_empty()
+        && ct_eq(
+            auth.strip_prefix("Bearer ").unwrap_or("").as_bytes(),
+            expected_bytes,
+        );
+    let query_ok = !expected_token.is_empty()
+        && !query_token.is_empty()
+        && ct_eq(query_token.as_bytes(), expected_bytes);
     let token_ok = bearer_ok || query_ok;
     if !token_ok {
         // 健康检查 / SSE endpoint / OPTIONS 都不需要 token（GET 试探开放）
@@ -277,10 +289,12 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
                 stats.last_request_at = Some(chrono::Utc::now().to_rfc3339());
             }
             let mut body = vec![0u8; content_length];
-            let _ = tokio::time::timeout(
+            tokio::time::timeout(
                 BODY_READ_TIMEOUT,
                 tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body),
-            ).await;
+            ).await
+                .map_err(|_| anyhow::anyhow!("读取未知 POST 请求体超时"))?
+                .context("读取未知 POST 请求体失败")?;
             let body_str = String::from_utf8_lossy(&body).to_string();
             eprintln!("[proxy] unknown POST path {}, treating as /mcp", path_no_q);
             // 注意：body 不落日志 —— tool call 参数里可能含密钥。
@@ -337,6 +351,22 @@ fn hex(b: u8) -> Option<u8> {
     }
 }
 
+/// 常量时间字节比较：长度不同直接 false(分支代价可忽略,不会泄露 token 长度差),
+/// 否则逐字节 XOR 累计到 `diff`,最后看 diff 是否为 0。整段执行时间只与较长那一侧相关,
+/// 不会随 token 内容变化 —— 防本机侧时序嗅探。
+///
+/// 不引入 subtle / constant_time_eq crate —— 这点代码量不值得加依赖。
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// 处理单个 JSON-RPC 请求，把响应 JSON 序列化为字符串（用于 SSE session 路由）
 async fn handle_jsonrpc_to_string(state: &AppState, body: &str) -> anyhow::Result<Option<String>> {
     let req: serde_json::Value = serde_json::from_str(body)?;
@@ -379,8 +409,19 @@ async fn serve_sse_session<W: tokio::io::AsyncWrite + Unpin>(
     _state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     let session_id = uuid::Uuid::new_v4().to_string();
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    crate::proxy::sessions().insert(session_id.clone(), tx).await;
+    // 有界 channel(64) —— local SSE 客户端消费速率足够,深 buffer 没意义,
+    // 反倒让客户端失联后我们还积累大量未发数据。64 个事件缓冲够应对 burst。
+    let (tx, mut rx) = mpsc::channel::<String>(64);
+    // 启动后台 cleanup task(幂等)
+    crate::proxy::spawn_session_cleanup();
+    // 满了 → 503 + 关流。不无限接受本机进程 spawn 的 SSE 连接。
+    if let Err(_id) = crate::proxy::sessions().insert(session_id.clone(), tx).await {
+        let _ = write_all(write,
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nRetry-After: 30\r\n\r\n"
+        ).await;
+        log("warn", "client", format!("SSE 拒绝连接：session 上限 {} 已满", crate::proxy::MAX_SESSIONS), None);
+        return Ok(());
+    }
     log("info", "client", format!("SSE 客户端已连接（session {}）", &session_id[..8]), None);
 
     let _ = write_all(write,
@@ -486,10 +527,12 @@ async fn http_tools_list(state: &AppState, id: Option<serde_json::Value>) -> ser
         let disabled: std::collections::HashSet<&str> = s.disabled_tools.iter().map(|s| s.as_str()).collect();
         // 只处理已在 registry 中的 server（用户手动启动的）
         if let Some(child) = reg.get(&s.id).await {
-            let srv = child.lock().await;
+            // 只读 meta.tools(瞬间持锁,纳秒级),不阻塞 io 锁 —— Dashboard
+            // `get_exposed_tools` 现在也能并发拿到锁了。
+            let meta = child.meta.read();
             // iter() 而非 drain(..) —— 客户端会反复调 tools/list，
             // drain 会把缓存清空，第二次起就拿不到工具了
-            for tool in srv.tools.iter() {
+            for tool in meta.tools.iter() {
                 let orig_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
                 if disabled.contains(orig_name.as_str()) {
                     continue;
@@ -538,26 +581,32 @@ async fn http_tools_call(state: &AppState, id: Option<serde_json::Value>, params
             "error": { "code": -32603, "message": format!("server '{server_name}' is not running, please start it first") }
         }),
     };
-    let mut child = child.lock().await;
-    let call_id = child.next_id();
+    // 锁粒度拆开:
+    // 1. `child.meta.write()` —— 拿下一个 id,瞬时持有,纳秒级
+    // 2. `child.io.lock().await` —— 写 stdin + 读响应,持锁直到响应回来
+    // 这样同 server 的并发调用不会互相饿死,Dashboard 读 tools 也不再被阻塞。
+    let call_id = {
+        let mut m = child.meta.write();
+        m.next_id()
+    };
     let req = serde_json::json!({
         "jsonrpc": "2.0", "id": call_id,
         "method": "tools/call",
         "params": { "name": tool_name, "arguments": arguments }
     });
-    use tokio::io::AsyncWriteExt;
-    if let Err(e) = child.stdin.write_all(format!("{}\n", req).as_bytes()).await {
-        log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 写入失败：{e}"), None);
-        return serde_json::json!({
-            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-            "error": { "code": -32603, "message": format!("write: {e}") }
-        });
-    }
-    let _ = child.stdin.flush().await;
-    let read = crate::proxy::read_response_from_child(
-        &mut child,
-        std::time::Duration::from_secs(120),
-    ).await;
+    let read = {
+        let mut io = child.io.lock().await;
+        use tokio::io::AsyncWriteExt;
+        if let Err(e) = io.stdin.write_all(format!("{}\n", req).as_bytes()).await {
+            log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 写入失败：{e}"), None);
+            return serde_json::json!({
+                "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                "error": { "code": -32603, "message": format!("write: {e}") }
+            });
+        }
+        let _ = io.stdin.flush().await;
+        crate::proxy::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await
+    };
     match read {
         Ok(Some((_id, mut v))) => {
             let is_err = v.get("error").is_some()

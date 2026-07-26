@@ -370,7 +370,7 @@ fn update_install_state<F: FnOnce(&mut StoredServer) -> bool>(
     f: F,
 ) {
     if let Err(e) = mutate_server(state.inner(), id, f) {
-        eprintln!("[cmd_install] update_install_state({id}) failed: {e}");
+        crate::proxy::log_event("error", "install", format!("update_install_state({id}) 写盘失败：{e}"), None);
     }
 }
 
@@ -381,7 +381,7 @@ async fn update_install_state_from<F: FnOnce(&mut StoredServer) -> bool>(
 ) {
     let Some(st) = crate::state::try_current() else { return; };
     if let Err(e) = mutate_server(&st, &s.id, f) {
-        eprintln!("[cmd_install] update_install_state_from({}) failed: {e}", s.id);
+        crate::proxy::log_event("error", "install", format!("update_install_state_from({}) 写盘失败：{e}", s.id), None);
     }
 }
 
@@ -395,7 +395,7 @@ fn write_back(state: &State<'_, Arc<AppState>>, id: &str, updated: &StoredServer
         slot.updated_at = keep_updated_at;
         true
     }) {
-        eprintln!("[cmd_install] write_back({id}) failed: {e}");
+        crate::proxy::log_event("error", "install", format!("write_back({id}) 写盘失败：{e}"), None);
     }
 }
 
