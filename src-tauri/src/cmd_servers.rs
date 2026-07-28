@@ -44,10 +44,13 @@ pub fn list_server_states(state: State<'_, Arc<AppState>>) -> Result<Vec<serde_j
     }
     Ok(list.iter().map(|s| {
         let st = states.get(&s.id).cloned().unwrap_or_else(|| "stopped".to_string());
+        // 只在状态为 error 时露出 last_error —— 一旦服务恢复(running/stopped),
+        // 旧错误就不再显示,因为服务已经正常了。
+        let err = if st == "error" { last_err.get(&s.name).cloned() } else { None };
         serde_json::json!({
             "server": from_stored(s),
             "status": st,
-            "last_error": last_err.get(&s.name).cloned(),
+            "last_error": err,
         })
     }).collect())
 }
@@ -59,9 +62,11 @@ pub fn get_server_state(id: String, state: State<'_, Arc<AppState>>) -> Result<s
     let states = state.storage.live_states.read();
     let logs = state.storage.logs.read();
     let st = states.get(&s.id).cloned().unwrap_or_else(|| "stopped".to_string());
-    let last_err = logs.iter().rev()
-        .find(|l| l.level == "error" && l.source == format!("server:{}", s.name))
-        .map(|l| l.message.clone());
+    let last_err = if st == "error" {
+        logs.iter().rev()
+            .find(|l| l.level == "error" && l.source == format!("server:{}", s.name))
+            .map(|l| l.message.clone())
+    } else { None };
     Ok(serde_json::json!({ "server": from_stored(&s), "status": st, "last_error": last_err }))
 }
 
@@ -239,6 +244,12 @@ pub async fn start_server(
         .clone();
     // 先启动 —— 启动失败不应留下错误的 auto_start 标记
     if let Err(e) = crate::proxy::start_one(&s).await {
+        // 将 live_state 标记为 error，这样 list_server_states 能正确填充 last_error
+        state
+            .storage
+            .live_states
+            .write()
+            .insert(s.id.clone(), "error".to_string());
         let log = LogRecord {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),

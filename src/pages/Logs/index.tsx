@@ -10,27 +10,42 @@
  * - 拉取失败 → 在表格区显示红条 + 重试按钮(loadError)
  * - 空数据 → 表格显示 "暂无日志" 提示(由 LogTable 渲染)
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Trash2, Download, AlertTriangle, Loader2, Search } from "lucide-react";
 import { Section } from "@/components/Section";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { useLogs } from "./useLogs";
 import { LogTable } from "./LogTable";
+import type { LogEntry } from "@/lib/ipc";
 
 export function Logs() {
   const { t } = useTranslation();
   const lg = useLogs();
+  // 筛选确认:输入框值(待确认) ≠ 实际过滤值
+  const [searchInput, setSearchInput] = useState("");
+  // 排序:null = 默认(时间降序), "asc" = 时间升序
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   // 自由文本搜索:过滤 message + source,大小写不敏感。
-  // 与 level/source filter 是 AND 关系(先 severity 过滤再文本过滤)。
   const visibleLogs = useMemo(() => {
-    if (!lg.search.trim()) return lg.logs;
-    const q = lg.search.toLowerCase();
-    return lg.logs.filter(
-      (l) => l.message.toLowerCase().includes(q) || l.source.toLowerCase().includes(q),
-    );
-  }, [lg.logs, lg.search]);
+    let list = lg.logs;
+    if (lg.search.trim()) {
+      const q = lg.search.toLowerCase();
+      list = list.filter(
+        (l) => l.message.toLowerCase().includes(q) || l.source.toLowerCase().includes(q),
+      );
+    }
+    // 排序
+    if (sortOrder === "asc") {
+      return [...list].reverse();
+    }
+    return list;
+  }, [lg.logs, lg.search, sortOrder]);
+
+  const applySearch = () => {
+    lg.setSearch(searchInput);
+  };
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(lg.logs, null, 2)], { type: "application/json" });
@@ -66,14 +81,20 @@ export function Logs() {
               <option value="warn">{t("logs.level_warn")}</option>
               <option value="error">{t("logs.level_error")}</option>
             </select>
-            <input
-              type="search"
-              className="input flex-1 min-w-[140px] max-w-[260px]"
-              placeholder={t("logs.search_placeholder") as string}
-              value={lg.search}
-              onChange={(e) => lg.setSearch(e.target.value)}
-              aria-label={t("logs.search_label") as string}
-            />
+            <div className="flex flex-1 min-w-[140px] max-w-[280px]">
+              <input
+                type="search"
+                className="input flex-1 rounded-r-none"
+                placeholder={t("logs.search_placeholder") as string}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") applySearch(); }}
+                aria-label={t("logs.search_label") as string}
+              />
+              <button className="btn-primary rounded-l-none" onClick={applySearch} title={t("common.search")}>
+                <Search size={14} />
+              </button>
+            </div>
             <select
               className="input w-auto"
               value={lg.sourceFilter}
@@ -98,13 +119,13 @@ export function Logs() {
                 className="accent-accent"
                 aria-label={t("logs.auto_refresh") as string}
               />
-              {t("logs.auto_refresh")}
+              {t("logs.auto_refresh_label", { seconds: 3 })}
             </label>
             <button className="btn-ghost shrink-0" onClick={exportJson} disabled={lg.logs.length === 0}>
               <Download size={14} />
               {t("logs.export_json")}
             </button>
-            <button className="btn-ghost shrink-0" onClick={() => lg.setConfirmClear(true)}>
+            <button className="btn-danger shrink-0" onClick={() => lg.setConfirmClear(true)}>
               <Trash2 size={14} />
               {t("logs.clear")}
             </button>
@@ -145,7 +166,7 @@ export function Logs() {
             {t("logs.no_match", { q: lg.search })}
           </div>
         ) : (
-          <LogTable logs={visibleLogs} />
+          <LogTable logs={visibleLogs} sortOrder={sortOrder} onToggleSort={() => setSortOrder((p) => p === "desc" ? "asc" : "desc")} />
         )}
       </Section>
 

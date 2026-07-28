@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { Server, Sparkles, Activity, Wrench, ChevronDown, ChevronRight, Plug, Plus, ArrowRight } from "lucide-react";
+import {
+  Server, Zap, Activity, Wrench, ChevronDown, ChevronRight,
+  Share2, Plus, ArrowRight, Blocks,
+} from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";
 import {
   getProxyStatus, getExposedTools,
@@ -103,92 +106,108 @@ export function Dashboard() {
   return (
     <div className="space-y-6 p-6">
       {/* Hero 横幅 */}
-      <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-r from-bg-subtle to-bg-elev p-6">
-        <div className="absolute right-0 top-0 h-full w-1/3 bg-gradient-to-l from-accent/10 to-transparent" />
-        <div className="relative flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <h1 className="text-2xl font-bold">{t("dashboard.welcome")}</h1>
-            <p className="text-sm text-fg-muted">{t("app.tagline")}</p>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <span className={`badge ${proxyOn ? "badge-ok" : "badge-mute"}`}>
-                <span className={`inline-block h-1.5 w-1.5 rounded-full ${proxyOn ? "bg-ok animate-pulse" : "bg-fg-muted"}`} />
-                {proxyOn ? t("dashboard.proxy_running") : t("dashboard.proxy_stopped")}
-              </span>
-              {proxy?.endpoint && (
-                <span className="badge-mute">
-                  <code className="font-mono">{proxy.endpoint}</code>
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-bg-subtle via-bg-elev to-bg-subtle">
+        {/* 装饰光斑 */}
+        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-accent/8 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-12 -left-12 h-36 w-36 rounded-full bg-ok/6 blur-2xl" />
+        <div className="relative p-7">
+          <div className="flex items-start justify-between gap-6">
+            <div className="space-y-2">
+              <h1 className="text-2xl font-bold tracking-tight">{t("dashboard.welcome")}</h1>
+              <p className="text-sm text-fg-muted">{t("app.tagline")}</p>
+              <div className="mt-4 flex flex-wrap items-center gap-2.5 text-xs">
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium ${proxyOn ? "bg-ok/12 text-ok" : "bg-surface-muted/40 text-fg-muted"}`}>
+                  <span className={`inline-block h-2 w-2 rounded-full ${proxyOn ? "bg-ok shadow-sm shadow-ok/40 animate-pulse" : "bg-fg-muted/50"}`} />
+                  {proxyOn ? t("dashboard.proxy_running") : t("dashboard.proxy_stopped")}
                 </span>
-              )}
+                {proxy?.endpoint && (
+                  <code className="rounded-md bg-surface-muted/30 px-2 py-1 font-mono text-2xs text-fg-muted">{proxy.endpoint}</code>
+                )}
+              </div>
             </div>
+            {info && (
+              <div className="shrink-0 rounded-lg border border-border bg-bg-subtle/60 px-3 py-2 text-center">
+                <div className="text-2xs text-fg-muted">{t("settings.version")}</div>
+                <div className="mt-0.5 font-mono text-sm font-semibold text-fg">v{info.version}</div>
+              </div>
+            )}
           </div>
-          {info && (
-            <div className="shrink-0 text-right text-xs text-fg-muted">
-              <div className="text-fg-muted">{t("settings.version")}</div>
-              <div className="font-mono text-fg">{info.version}</div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* 加载失败提示:任一 IPC 抛错时显示,给用户「具体错什么 + 重试按钮」而不是冷冰冰的 0 */}
+      {/* 加载失败提示 */}
       {loadError && (
-        <div className="card border-err/40 bg-err/5 p-3 text-sm flex items-center justify-between">
-          <span className="text-err">
-            {t("dashboard.load_error")}: {loadError}
-          </span>
-          <button className="btn-ghost" onClick={() => { void load(); }}>
-            {t("dashboard.retry")}
-          </button>
+        <div className="rounded-xl border border-err/30 bg-err/5 px-4 py-3 text-sm flex items-center justify-between">
+          <span className="text-err">{t("dashboard.load_error")}: {loadError}</span>
+          <button className="btn-ghost text-err" onClick={() => { void load(); }}>{t("dashboard.retry")}</button>
         </div>
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard icon={<Server size={16} />} label={t("dashboard.stats.servers_total")} value={dash(servers.length)} bar="bg-fg-muted" />
-        <StatCard icon={<Activity size={16} />} label={t("dashboard.stats.servers_running")} value={dash(runningCount)} bar="bg-ok" accent={!initialLoad && runningCount > 0} />
-        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_total")} value={dash(skills.length)} bar="bg-warn" />
-        <StatCard icon={<Sparkles size={16} />} label={t("dashboard.stats.skills_enabled")} value={dash(enabledSkills)} bar="bg-accent" accent={!initialLoad && enabledSkills > 0} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          icon={<Server size={18} />}
+          label={t("dashboard.stats.servers_total")}
+          value={dash(servers.length)}
+          color="fg"
+        />
+        <StatCard
+          icon={<Activity size={18} />}
+          label={t("dashboard.stats.servers_running")}
+          value={dash(runningCount)}
+          color="ok"
+          accent={!initialLoad && runningCount > 0}
+        />
+        <StatCard
+          icon={<Zap size={18} />}
+          label={t("dashboard.stats.skills_total")}
+          value={dash(skills.length)}
+          color="warn"
+        />
+        <StatCard
+          icon={<Blocks size={18} />}
+          label={t("dashboard.stats.skills_enabled")}
+          value={dash(enabledSkills)}
+          color="accent"
+          accent={!initialLoad && enabledSkills > 0}
+        />
       </div>
 
-      {/* 已暴露给客户端的工具（按 server 聚合） */}
+      {/* 已暴露给客户端的工具 */}
       {exposedTools.length > 0 && (
-        <div className="card space-y-2">
+        <div className="rounded-xl border border-border bg-bg-subtle">
           <button
-            className="flex w-full flex-wrap items-center justify-between gap-y-1 text-left"
+            className="flex w-full items-center gap-2.5 px-5 py-3.5 text-left transition-colors hover:bg-bg-elev/50 cursor-pointer"
             onClick={() => setToolsOpen((o) => !o)}
           >
-            <div className="flex items-center gap-2">
-              {toolsOpen ? <ChevronDown size={14} className="text-fg-muted" /> : <ChevronRight size={14} className="text-fg-muted" />}
-              <Wrench size={16} className="text-accent" />
-              <span className="text-sm font-semibold">{t("dashboard.exposed_tools")}</span>
-              <span className="badge-mute text-3xs">
-                {t("dashboard.exposed_tools_total", { total: exposedTools.length + totalDisabled })}
-              </span>
-              {totalDisabled > 0 ? (
-                <span className="badge-mute text-3xs">
-                  {t("dashboard.exposed_tools_breakdown", {
-                    enabled: exposedTools.length,
-                    disabled: totalDisabled,
-                  })}
-                </span>
-              ) : (
-                <span className="badge-mute text-3xs">
-                  {t("dashboard.exposed_tools_count", { count: exposedTools.length })}
-                </span>
-              )}
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent/12 text-accent">
+              <Wrench size={14} />
             </div>
-            <span className="text-2xs text-fg-muted">{t("dashboard.exposed_tools_hint")}</span>
+            <span className="text-sm font-semibold">{t("dashboard.exposed_tools")}</span>
+            <span className="badge-mute text-3xs">
+              {t("dashboard.exposed_tools_total", { total: exposedTools.length + totalDisabled })}
+            </span>
+            {totalDisabled > 0 && (
+              <span className="badge-mute text-3xs">
+                {t("dashboard.exposed_tools_breakdown", { enabled: exposedTools.length, disabled: totalDisabled })}
+              </span>
+            )}
+            <span className="ml-auto shrink-0 text-2xs text-fg-muted">{t("dashboard.exposed_tools_hint")}</span>
+            <ChevronDown
+              size={15}
+              className={`shrink-0 text-fg-muted transition-transform duration-200 ${toolsOpen ? "rotate-0" : "-rotate-90"}`}
+            />
           </button>
           {toolsOpen && (
-            <div className="max-h-72 space-y-1 overflow-auto">
+            <div className="max-h-64 overflow-y-auto border-t border-border px-5 py-3 space-y-1">
               {exposedTools.map((t) => (
-                <div key={t.name} className="rounded-md border border-border bg-bg-subtle/60 px-3 py-2">
+                <div key={t.name} className="rounded-lg border border-border/60 bg-bg-elev/40 px-3.5 py-2.5 transition-colors hover:bg-bg-elev">
                   <div className="flex items-center gap-2 text-xs">
                     <span className="badge-accent shrink-0 text-3xs">{t.__server}</span>
                     <code className="font-mono text-fg">{t.name}</code>
                   </div>
                   {t.description && (
-                    <div className="mt-1 line-clamp-2 text-xs text-fg-muted">{t.description}</div>
+                    <div className="mt-1 line-clamp-2 pl-[52px] text-xs text-fg-muted">{t.description}</div>
                   )}
                 </div>
               ))}
@@ -201,11 +220,11 @@ export function Dashboard() {
       <Section title={t("dashboard.quick_start.title")}>
         {servers.length === 0 && skills.length === 0 ? (
           <EmptyHint>
-            <div className="space-y-3">
-              <div>{t("dashboard.quick_start.empty_desc")}</div>
+            <div className="space-y-4">
+              <div className="text-fg-muted">{t("dashboard.quick_start.empty_desc")}</div>
               <div className="flex justify-center gap-2">
                 <button className="btn-primary" onClick={() => nav("/servers")}><Plus size={12}/>{t("dashboard.quick_start.add_server")}</button>
-                <button className="btn-ghost" onClick={() => nav("/skills")}><Sparkles size={12}/>{t("dashboard.quick_start.add_skill")}</button>
+                <button className="btn-ghost" onClick={() => nav("/skills")}><Zap size={12}/>{t("dashboard.quick_start.add_skill")}</button>
                 <button className="btn-ghost" onClick={() => nav("/connections")}>{t("dashboard.action_connect_title")} →</button>
               </div>
             </div>
@@ -213,21 +232,24 @@ export function Dashboard() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-3">
             <ActionCard
-              icon={<Plus size={18} />}
+              icon={<Server size={20} />}
               title={t("dashboard.action_add_mcp_title")}
               desc={t("dashboard.stats.servers_total") + `: ${servers.length}`}
+              color="accent"
               onClick={() => nav("/servers")}
             />
             <ActionCard
-              icon={<Sparkles size={18} />}
+              icon={<Zap size={20} />}
               title={t("dashboard.action_add_skill_title")}
               desc={t("dashboard.stats.skills_total") + `: ${skills.length}`}
+              color="ok"
               onClick={() => nav("/skills")}
             />
             <ActionCard
-              icon={<Plug size={18} />}
+              icon={<Share2 size={20} />}
               title={t("dashboard.action_connect_title")}
               desc={t("dashboard.action_connect_desc")}
+              color="warn"
               onClick={() => nav("/connections")}
             />
           </div>
@@ -237,30 +259,51 @@ export function Dashboard() {
   );
 }
 
-function StatCard({ icon, label, value, accent, bar }: { icon: React.ReactNode; label: string; value: number | string; accent?: boolean; bar: string }) {
+const colorMap = {
+  fg:     { bg: "bg-fg-muted/10",    text: "text-fg-muted", bar: "bg-fg-muted" },
+  ok:     { bg: "bg-ok/10",          text: "text-ok",       bar: "bg-ok" },
+  warn:   { bg: "bg-warn/10",        text: "text-warn",     bar: "bg-warn" },
+  accent: { bg: "bg-accent/10",      text: "text-accent",   bar: "bg-accent" },
+} as const;
+
+function StatCard({ icon, label, value, accent, color = "fg" }: { icon: React.ReactNode; label: string; value: number | string; accent?: boolean; color?: keyof typeof colorMap }) {
+  const c = colorMap[color];
   return (
-    <div className="card relative overflow-hidden pl-5 transition-transform hover:-translate-y-0.5">
-      <div className={`absolute left-0 top-0 h-full w-1 ${bar}`} />
-      <div className="flex items-center gap-2 text-xs text-fg-muted">{icon}{label}</div>
-      <div className={`mt-1 text-2xl font-semibold ${accent ? "text-accent" : ""}`}>{value}</div>
+    <div className="group relative overflow-hidden rounded-xl border border-border bg-bg-subtle p-4 transition-all hover:-translate-y-0.5 hover:shadow-md hover:shadow-accent/5">
+      <div className="flex items-center gap-3">
+        <div className={`grid h-9 w-9 place-items-center rounded-lg ${c.bg} ${c.text} transition-colors`}>
+          {icon}
+        </div>
+        <div>
+          <div className="text-2xs text-fg-muted">{label}</div>
+          <div className={`mt-0.5 text-2xl font-bold tracking-tight ${accent ? "text-accent" : "text-fg"}`}>{value}</div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ActionCard({ icon, title, desc, onClick }: { icon: React.ReactNode; title: string; desc: string; onClick: () => void }) {
+const actionColorMap = {
+  accent: { bg: "bg-accent/10",  hoverBg: "group-hover:bg-accent",  border: "hover:border-accent/40",  text: "text-accent" },
+  ok:     { bg: "bg-ok/10",      hoverBg: "group-hover:bg-ok",      border: "hover:border-ok/40",      text: "text-ok" },
+  warn:   { bg: "bg-warn/10",    hoverBg: "group-hover:bg-warn",    border: "hover:border-warn/40",    text: "text-warn" },
+} as const;
+
+function ActionCard({ icon, title, desc, onClick, color = "accent" }: { icon: React.ReactNode; title: string; desc: string; onClick: () => void; color?: keyof typeof actionColorMap }) {
+  const c = actionColorMap[color];
   return (
     <button
       onClick={onClick}
-      className="group flex items-center gap-3 rounded-lg border border-border bg-bg-subtle p-4 text-left transition-colors hover:border-accent/50 hover:bg-bg-elev"
+      className={`group flex items-center gap-4 rounded-xl border border-border bg-bg-subtle p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-accent/5 ${c.border}`}
     >
-      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-accent/15 text-accent transition-colors group-hover:bg-accent group-hover:text-white">
+      <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl ${c.bg} ${c.text} transition-all ${c.hoverBg} group-hover:text-white group-hover:shadow-md`}>
         {icon}
       </div>
       <div className="flex-1">
         <div className="text-sm font-semibold">{title}</div>
-        <div className="text-xs text-fg-muted">{desc}</div>
+        <div className="mt-0.5 text-xs text-fg-muted">{desc}</div>
       </div>
-      <ArrowRight size={16} className="text-fg-muted transition-transform group-hover:translate-x-1" />
+      <ArrowRight size={16} className="text-fg-muted transition-all group-hover:translate-x-1 group-hover:text-fg" />
     </button>
   );
 }

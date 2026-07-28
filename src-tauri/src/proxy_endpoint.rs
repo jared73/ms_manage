@@ -55,7 +55,7 @@ pub async fn get_router_config(state: State<'_, Arc<AppState>>) -> Result<serde_
                 "_comment": "Authorization: Bearer <token> header not included — get the token via reveal_token and paste into your client"
             }
         },
-        "instructions": "Click 'Copy token' below to copy the real token, then paste the mcpServers object into your MCP client's config (Claude Desktop / Cursor / Cline / Continue / Qoder). For Claude Desktop: %APPDATA%\\Claude\\claude_desktop_config.json. For Claude Code: ~/.claude/mcp_servers.json. For Cursor: ~/.cursor/mcp.json. Restart the client after editing. Make sure the MS Manage HTTP service is running first (click 'Start' on this page)."
+        "instructions": "" // 文案走前端 i18n(zh.ts / en.ts → connections.http_instructions)
     }))
 }
 

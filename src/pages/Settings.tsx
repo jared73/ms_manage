@@ -232,40 +232,35 @@ export function Settings() {
 
   return (
     <div className="space-y-4 p-6">
-      <Section title={t("settings.title")} action={
-        <button className="btn-primary" onClick={save} disabled={saving}>
-          {saving ? <Loader2 className="icon-sm inline animate-spin mr-1" /> : <Save className="icon-sm"/>}
-          {saving ? t("settings.saving") : t("common.save")}
-          {!saving && saved && <Check size={12} aria-hidden="true" />}
-        </button>
-      }>
+      <Section title={t("settings.title")}>
         {/* General */}
         <div className="card space-y-3">
           <h3 className="font-semibold">{t("settings.general")}</h3>
           <Row label={t("common.language")}>
-            <select className="input max-w-[200px]" value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value as "zh" | "en" })}>
+            <select className="input max-w-[200px]" value={settings.language} onChange={(e) => {
+              const updated = { ...settings, language: e.target.value as "zh" | "en" };
+              setSettings(updated);
+              void i18n.changeLanguage(updated.language);
+              updateSettings(updated).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
+            }}>
               <option value="zh">{t("settings.lang_zh")}</option>
               <option value="en">{t("settings.lang_en")}</option>
             </select>
           </Row>
           <Row label={t("settings.logs_max_entries")}>
             <input type="number" className="input max-w-[160px]" value={settings.logs_max_entries}
-              onChange={(e) => setSettings({ ...settings, logs_max_entries: parseInt(e.target.value, 10) || 1000 })} />
+              onChange={(e) => {
+                const updated = { ...settings, logs_max_entries: parseInt(e.target.value, 10) || 1000 };
+                setSettings(updated);
+                updateSettings(updated).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
+              }} />
           </Row>
-        </div>
-
-        {/* NPM / Registry —— 只保留"自动注入"勾选，URL 和 4 个镜像按钮都删了
-            （硬编码使用淘宝镜像，URL 改了也不生效）*/}
-        <div className="card space-y-3">
-          <h3 className="font-semibold">{t("settings.npm_card_title")}</h3>
           <Row label={t("settings.auto_inject_npm_registry")}>
             <input type="checkbox" checked={settings.auto_inject_npm_registry ?? true}
               onChange={(e) => {
                 const updated = { ...settings, auto_inject_npm_registry: e.target.checked };
                 setSettings(updated);
-                updateSettings(updated).catch((err) => {
-                  toast.error(t("settings.save_failed", { msg: describeError(err) }) as string);
-                });
+                updateSettings(updated).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
               }} />
             <span className="ml-2 text-xs text-fg-muted">
               {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"registry.npmmirror.com"}</code>

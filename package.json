@@ -1,7 +1,7 @@
 {
   "name": "ms_manage",
   "private": true,
-  "version": "0.3.0",
+  "version": "1.5.0",
   "type": "module",
   "description": "MS Manage — MCP server 与 skill 统一管理工具",
   "scripts": {
@@ -10,8 +10,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
-    "tauri:build:debug": "tauri build --debug",
+    "tauri:build": "node scripts/bump-version.cjs && tauri build",
+    "tauri:build:debug": "node scripts/bump-version.cjs && tauri build --debug",
+    "tauri:build:nobump": "tauri build",
     "lint": "eslint src/",
     "test": "vitest run",
     "test:watch": "vitest",

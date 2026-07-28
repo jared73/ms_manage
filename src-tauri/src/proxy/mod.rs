@@ -458,7 +458,7 @@ pub async fn spawn_child(srv: &StoredServer) -> anyhow::Result<Arc<ChildEntry>> 
     crate::process_util::apply_no_window(&mut c);
     let mut child = c.spawn().map_err(|e| {
         let friendly = crate::diagnose::friendly_spawn_error(cmd_str, &e);
-        log_event("warn", "server", format!("server「{}」启动失败：{friendly}", srv.name), None);
+        log_event("error", &format!("server:{}", srv.name), format!("启动失败：{friendly}"), None);
         if let Some(st) = crate::state::try_current() {
             st.storage.live_states.write().insert(srv.id.clone(), ServerStatus::Error.as_str().to_string());
         }

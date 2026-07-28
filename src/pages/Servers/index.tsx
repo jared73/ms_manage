@@ -25,11 +25,13 @@ import {
   Download,
   PackageCheck,
   Unplug,
-  FileJson,
   Zap,
   RefreshCw,
   Check,
   XCircle,
+  Copy,
+  CopyPlus,
+  Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
@@ -45,6 +47,7 @@ import {
   testServer,
   refreshInstallStatus,
   deleteServer,
+  upsertServer,
 } from "@/lib/ipc";
 import type { McpServer, ServerState, Project } from "@/lib/ipc";
 import { ProjectsModal } from "./ProjectsModal";
@@ -62,6 +65,10 @@ export function Servers() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState("");
   const [filterProject, setFilterProject] = useState<string>("");
+  // 筛选确认:输入框的值 ≠ 实际过滤值,Enter/按钮才提交
+  const [searchInput, setSearchInput] = useState("");
+  // 已清除的错误(server.name → true),前端隐藏,不删日志
+  const [dismissedErrors, setDismissedErrors] = useState<Set<string>>(new Set());
 
   // ---- Modal / Drawer ----
   const [editing, setEditing] = useState<McpServer | null>(null);
@@ -232,6 +239,44 @@ export function Servers() {
     }
   };
 
+  const handleDuplicate = async (s: McpServer) => {
+    const newName = `${s.name} (Copy)`;
+    const clone: McpServer = {
+      ...s,
+      id: crypto.randomUUID(),
+      name: newName,
+      enabled: false,
+      auto_start: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    try {
+      await upsertServer(clone);
+      await load();
+      toast.success(t("servers.toast_duplicated", { name: s.name, newName }) as string, { duration: 2000 });
+    } catch (e) {
+      toast.error(t("servers.toast_save_failed", { msg: describeError(e) }) as string);
+    }
+  };
+
+  const handleCopyConfig = async (s: McpServer) => {
+    try {
+      const json = buildMcpServersJson([s]);
+      await navigator.clipboard.writeText(json);
+      toast.success(t("servers.toast_config_copied", { name: s.name }) as string, { duration: 1500 });
+    } catch {
+      // fallback: trigger download
+      const blob = new Blob([buildMcpServersJson([s])], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${s.name}_mcp.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.info(t("servers.toast_clipboard_failed", { label: s.name }) as string);
+    }
+  };
+
   /**
    * 行级 action 派发器:稳定的 useCallback 一次创建,所有 row 共用。
    * 各 row 通过 onAction(action, server) 调用,避免 11 个 inline 箭头 prop
@@ -249,10 +294,11 @@ export function Servers() {
         case "delete": setConfirmDelete(s); return;
         case "edit": setEditing(s); return;
         case "view": setViewing(s); return;
-        case "export": exportSingleToJson(s); return;
         case "install": return install.installOne(s);
         case "uninstall": return install.uninstallOne(s);
         case "refresh": return handleRefreshInstall(s);
+        case "duplicate": return handleDuplicate(s);
+        case "copyConfig": return handleCopyConfig(s);
       }
       // 编译期保证:每个 action 都被处理,这里不需要 default
       const _exhaustive: never = action;
@@ -366,6 +412,9 @@ export function Servers() {
                 {t("servers.install_btn_text", { count: pendingInstall.length })}
               </button>
             )}
+            <button className="btn-ghost" onClick={load} title={t("servers.refresh_list") as string}>
+              <RefreshCw size={14} />
+            </button>
             <button className="btn-ghost" onClick={() => setManagingProjects(true)}>
               <FolderOpen size={14} />
               {t("projects.title")}
@@ -394,13 +443,23 @@ export function Servers() {
         }
       >
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="input max-w-sm"
-            placeholder={t("common.search")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label={t("common.search")}
-          />
+          <div className="relative flex max-w-sm flex-1">
+            <input
+              className="input rounded-r-none"
+              placeholder={t("common.search")}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput); }}
+              aria-label={t("common.search")}
+            />
+            <button
+              className="btn-primary rounded-l-none"
+              onClick={() => setSearch(searchInput)}
+              title={t("common.search")}
+            >
+              <Search size={14} />
+            </button>
+          </div>
           <select
             className="input max-w-[180px]"
             value={filterProject}
@@ -414,7 +473,7 @@ export function Servers() {
               </option>
             ))}
           </select>
-          <span className="text-xs text-fg-muted">
+          <span className="text-xs text-fg-muted tabular-nums">
             {filtered.length} / {servers.length}
           </span>
         </div>
@@ -492,21 +551,21 @@ export function Servers() {
         ) : (
           // 横向滚动容器:表格列宽总和 > 容器宽度时 (例如 6 列的工具列会顶起来),
           // 不允许整页横向滚动只允许表格区域横向滚动 —— 避免侧栏也被推跑。
-          <div className="overflow-hidden rounded-lg border border-border">
+          <div className="overflow-hidden rounded-lg border border-border shadow-sm">
             <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
-              <thead className="bg-bg-subtle text-left text-xs uppercase text-fg-muted">
-                <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("common.name")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("common.transport")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("projects.title")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("common.status")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("servers.col_pkg")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium">{t("common.last_error")}</th>
-                  <th scope="col" className="px-3 py-2 font-medium text-right">{t("common.actions")}</th>
+            <table className="w-full min-w-[800px] text-sm">
+              <thead>
+                <tr className="border-b border-border bg-bg-subtle">
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("common.name")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("common.transport")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("projects.title")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("common.status")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("servers.col_pkg")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("common.last_error")}</th>
+                  <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wider text-fg-muted">{t("common.actions")}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-border">
                 {filtered.map((s) => (
                   <ServerRow
                     key={s.id}
@@ -522,6 +581,8 @@ export function Servers() {
                     }
                     isUninstalling={install.uninstallingIds.has(s.id)}
                     installProgress={install.progress[s.id]}
+                    errorDismissed={dismissedErrors.has(s.name)}
+                    onDismissError={() => setDismissedErrors((p) => new Set(p).add(s.name))}
                     onAction={dispatchRow}
                   />
                 ))}
@@ -650,7 +711,7 @@ export function Servers() {
  *  这样 React.memo 才能真正生效(避免 11 个 inline 箭头 prop 让浅比较失效)。 */
 export type ServerRowAction =
   | "start" | "stop" | "test" | "delete" | "edit" | "view"
-  | "export" | "install" | "uninstall" | "refresh";
+  | "install" | "uninstall" | "refresh" | "duplicate" | "copyConfig";
 
 interface ServerRowProps {
   server: McpServer;
@@ -663,6 +724,8 @@ interface ServerRowProps {
   isProbing: boolean;
   isDeleting: boolean;
   installProgress?: { stage: string; message: string };
+  errorDismissed: boolean;
+  onDismissError: () => void;
   /**
    * 稳定的 useCallback 派发器。父组件不应传新箭头,否则 memo 会失效。
    * memo 比较 server / state / projectName / 7 个 bool / progress(text) 是否变化,
@@ -682,28 +745,55 @@ const ServerRow = React.memo(function ServerRow({
   isProbing,
   isDeleting,
   installProgress,
+  errorDismissed,
+  onDismissError,
   onAction,
 }: ServerRowProps) {
   const { t } = useTranslation();
   const showInstall = s.needs_install === true;
   const startBlocked = showInstall && !s.installed;
-  // 任意动作进行中(启动/停止/测试/删除),编辑/导出/探测等都要锁定
   const anyBusy = isStarting || isStopping || isProbing || isDeleting;
+  const isDisabled = !s.enabled;
+
+  const transportBadge = (t: string) => {
+    switch (t) {
+      case "stdio": return "badge-accent";
+      case "sse": return "badge-ok";
+      case "http": return "badge-warn";
+      default: return "badge-mute";
+    }
+  };
 
   return (
-    <tr className="border-t border-border hover:bg-overlay-soft">
-      <td className="px-3 py-2 cursor-pointer" onClick={() => onAction("view", s)} title={t("servers.view_action_title")} aria-label={t("servers.row_view")}>
-        <div className="font-medium">{s.name}</div>
-        {s.description && <div className="text-xs text-fg-muted">{s.description}</div>}
+    <tr className={`group transition-colors hover:bg-overlay-soft ${isDisabled ? "opacity-50" : ""}`}>
+      {/* Name + description */}
+      <td className="px-4 py-2.5 cursor-pointer" onClick={() => onAction("view", s)}>
+        <div className="flex items-center gap-2">
+          {/* 启/禁用指示点 */}
+          <span
+            className={`inline-block h-2 w-2 shrink-0 rounded-full ${s.enabled ? "bg-ok" : "bg-fg-muted"}`}
+            title={s.enabled ? t("servers.detail_status_enabled") : t("servers.detail_status_disabled")}
+          />
+          <div className="min-w-0">
+            <div className="truncate font-medium">{s.name}</div>
+            {s.description && (
+              <div className="truncate text-xs text-fg-muted">{s.description}</div>
+            )}
+          </div>
+        </div>
       </td>
-      <td className="px-3 py-2">
-        <span className="badge-mute">{s.transport}</span>
+      {/* Transport */}
+      <td className="px-4 py-2.5">
+        <span className={`badge uppercase text-3xs ${transportBadge(s.transport)}`}>{s.transport}</span>
       </td>
-      <td className="px-3 py-2 text-xs text-fg-muted">{projectName}</td>
-      <td className="px-3 py-2">
-        {st ? <StatusBadge status={st.status} /> : <span className="text-fg-muted">—</span>}
+      {/* Project */}
+      <td className="px-4 py-2.5 text-xs text-fg-muted">{projectName}</td>
+      {/* Status */}
+      <td className="px-4 py-2.5">
+        {st ? <StatusBadge status={st.status} /> : <span className="text-xs text-fg-muted">—</span>}
       </td>
-      <td className="px-3 py-2 text-xs">
+      {/* Package */}
+      <td className="px-4 py-2.5 text-xs">
         {!showInstall ? (
           <span className="text-fg-muted">—</span>
         ) : isInstalling || isUninstalling ? (
@@ -735,10 +825,7 @@ const ServerRow = React.memo(function ServerRow({
               )}
             </button>
             {s.install_error && (
-              <span
-                className="truncate text-3xs text-fg-muted max-w-[180px]"
-                title={s.install_error}
-              >
+              <span className="truncate text-3xs text-fg-muted max-w-[180px]" title={s.install_error}>
                 {s.install_error}
               </span>
             )}
@@ -780,26 +867,42 @@ const ServerRow = React.memo(function ServerRow({
           </div>
         )}
       </td>
-      <td className="px-3 py-2 text-xs text-err/80 max-w-xs truncate">{st?.last_error ?? "—"}</td>
-      <td className="px-3 py-2">
-        <div className="flex justify-end gap-1">
+      {/* Last error */}
+      <td className="px-4 py-2.5">
+        {st?.last_error && !errorDismissed ? (
+          <div className="flex items-center gap-1">
+            <span className="block max-w-[130px] truncate text-xs text-err/80" title={st.last_error}>
+              {st.last_error}
+            </span>
+            <button
+              className="shrink-0 rounded px-1 py-0.5 text-2xs text-err/60 hover:bg-err/10 hover:text-err transition-colors"
+              onClick={onDismissError}
+              title={t("common.close")}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-fg-muted">—</span>
+        )}
+      </td>
+      {/* Actions */}
+      <td className="px-4 py-2.5">
+        <div className="flex items-center justify-end gap-0.5">
+          {/* 启动/停止 */}
           {st?.status === "running" ? (
             <button
-              className="btn-ghost p-1.5 text-err hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn-ghost p-1.5 text-err hover:opacity-80 disabled:opacity-40"
               onClick={() => onAction("stop", s)}
               disabled={isStopping || isProbing || isDeleting}
               title={t("common.stop")}
               aria-label={t("servers.row_stop")}
             >
-              {isStopping ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Square size={14} />
-              )}
+              {isStopping ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
             </button>
           ) : (
             <button
-              className="btn-ghost p-1.5 text-ok disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn-ghost p-1.5 text-ok disabled:opacity-40"
               onClick={() => onAction("start", s)}
               disabled={isStarting || startBlocked || isProbing || isDeleting}
               title={startBlocked ? t("servers.preinst_required_for_start") : t("common.start")}
@@ -808,21 +911,21 @@ const ServerRow = React.memo(function ServerRow({
               {isStarting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             </button>
           )}
+          {/* 分隔 */}
+          <span className="mx-0.5 h-4 w-px bg-border" />
+          {/* 测试 */}
           <button
-            className="btn-ghost p-1.5 text-warn hover:text-warn/80 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-ghost p-1.5 text-warn hover:text-warn/80 disabled:opacity-40"
             onClick={() => onAction("test", s)}
             disabled={anyBusy}
             title={t("common.test")}
             aria-label={t("common.test")}
           >
-            {isProbing ? (
-              <Loader2 size={14} className="animate-spin text-warn" />
-            ) : (
-              <TestTube2 size={14} />
-            )}
+            {isProbing ? <Loader2 size={14} className="animate-spin text-warn" /> : <TestTube2 size={14} />}
           </button>
+          {/* 编辑 */}
           <button
-            className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-40"
             onClick={() => onAction("edit", s)}
             disabled={anyBusy}
             title={t("common.edit")}
@@ -830,27 +933,37 @@ const ServerRow = React.memo(function ServerRow({
           >
             <Pencil size={14} />
           </button>
+          {/* 更多操作：分组在下拉或直接露出 */}
+          <span className="mx-0.5 h-4 w-px bg-border" />
+          {/* 复制配置 */}
           <button
-            className="btn-ghost p-1.5 text-fg-muted hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed"
-            onClick={() => onAction("export", s)}
+            className="btn-ghost p-1.5 text-fg-muted hover:text-accent disabled:opacity-40"
+            onClick={() => onAction("copyConfig", s)}
             disabled={anyBusy}
-            title={t("servers.export_single_btn_title") as string}
-            aria-label={t("servers.row_copy")}
+            title={t("servers.copy_server_config")}
+            aria-label={t("servers.copy_server_config")}
           >
-            <FileJson size={14} />
+            <Copy size={14} />
           </button>
+          {/* 复制服务器 */}
           <button
-            className="btn-ghost p-1.5 text-err hover:text-err/80 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-ghost p-1.5 text-fg-muted hover:text-accent disabled:opacity-40"
+            onClick={() => onAction("duplicate", s)}
+            disabled={anyBusy}
+            title={t("servers.duplicate_server")}
+            aria-label={t("servers.row_duplicate")}
+          >
+            <CopyPlus size={14} />
+          </button>
+          {/* 删除 */}
+          <button
+            className="btn-ghost p-1.5 text-err/60 hover:text-err disabled:opacity-40"
             onClick={() => onAction("delete", s)}
             disabled={anyBusy}
             title={t("common.delete")}
             aria-label={t("servers.row_delete")}
           >
-            {isDeleting ? (
-              <Loader2 size={14} className="animate-spin text-err" />
-            ) : (
-              <Trash2 size={14} />
-            )}
+            {isDeleting ? <Loader2 size={14} className="animate-spin text-err" /> : <Trash2 size={14} />}
           </button>
         </div>
       </td>

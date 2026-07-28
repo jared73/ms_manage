@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search } from "lucide-react";
+import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search, LayoutGrid, List } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
@@ -31,6 +31,8 @@ export function Skills() {
   // 自由文本搜索:过滤 name/description,大小写不敏感。
   // Skills 数量一般 < 50,在前端过滤就够了;不需要走 IPC。
   const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const visibleSkills = useMemo(() => {
     if (!search.trim()) return skills;
     const q = search.toLowerCase();
@@ -171,16 +173,30 @@ export function Skills() {
         title={t("skills.title")}
         action={
           <div className="flex gap-2">
-            <input
-              type="search"
-              className="input max-w-[180px]"
-              placeholder={t("skills.search_placeholder") as string}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              aria-label={t("skills.search_label") as string}
-            />
-            <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title={t("skills.install_from_zip_tooltip") as string}>
-              <Upload className="icon-sm"/>{t("skills.install_from_zip")}
+            <div className="flex max-w-[220px]">
+              <input
+                type="search"
+                className="input flex-1 rounded-r-none"
+                placeholder={t("skills.search_placeholder") as string}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput); }}
+                aria-label={t("skills.search_label") as string}
+              />
+              <button className="btn-primary rounded-l-none" onClick={() => setSearch(searchInput)} title={t("common.search")}>
+                <Search size={14} />
+              </button>
+            </div>
+            <div className="flex rounded-md border border-border">
+              <button className={`px-2 py-1.5 rounded-l-md ${viewMode === "card" ? "bg-accent/15 text-accent" : "text-fg-muted hover:text-fg"}`} onClick={() => setViewMode("card")}>
+                <LayoutGrid size={14} />
+              </button>
+              <button className={`px-2 py-1.5 rounded-r-md border-l border-border ${viewMode === "list" ? "bg-accent/15 text-accent" : "text-fg-muted hover:text-fg"}`} onClick={() => setViewMode("list")}>
+                <List size={14} />
+              </button>
+            </div>
+            <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title={t("skills.import_tooltip") as string}>
+              <Upload className="icon-sm"/>{t("skills.import_btn")}
             </button>
             <button className="btn-ghost" onClick={() => openDataDir()} title={t("skills.open_data_dir_tooltip") as string}>
               <FolderOpen className="icon-sm"/>{t("skills.data_dir_btn")}
@@ -195,6 +211,35 @@ export function Skills() {
           <div className="rounded-md border border-border bg-bg-subtle p-6 text-center text-sm text-fg-muted">
             <Search className="icon-lg mx-auto mb-2 opacity-50" />
             {t("skills.no_match", { q: search })}
+          </div>
+        ) : viewMode === "list" ? (
+          <div className="overflow-hidden rounded-lg border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-bg-subtle text-left text-xs uppercase text-fg-muted">
+                  <th className="px-4 py-2 font-medium">{t("common.name")}</th>
+                  <th className="px-4 py-2 font-medium">{t("common.status")}</th>
+                  <th className="px-4 py-2 font-medium">{t("skills.files_label_short")}</th>
+                  <th className="px-4 py-2 font-medium">{t("skills.updated_at")}</th>
+                  <th className="px-4 py-2 text-right font-medium">{t("common.actions")}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {visibleSkills.map((s) => (
+                  <tr key={s.id} className={`hover:bg-overlay-soft ${!s.enabled ? "opacity-50" : ""}`}>
+                    <td className="px-4 py-2"><div className="truncate font-medium">{s.name}</div></td>
+                    <td className="px-4 py-2"><span className={`inline-flex items-center gap-1 text-xs ${s.enabled ? "text-ok" : "text-fg-muted"}`}><span className={`inline-block h-1.5 w-1.5 rounded-full ${s.enabled ? "bg-ok" : "bg-fg-muted"}`} />{s.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
+                    <td className="px-4 py-2 text-xs text-fg-muted">{s.files?.length ?? "—"}</td>
+                    <td className="px-4 py-2 text-xs text-fg-muted whitespace-nowrap">{new Date(s.updated_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-2"><div className="flex justify-end gap-1">
+                      <button className="btn-ghost p-1.5 text-ok disabled:opacity-50" onClick={() => handleToggle(s)} disabled={!!busyIds[s.id]} title={s.enabled ? t("common.disable") : t("common.enable")}>{busyIds[s.id] === "toggle" ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-ok border-t-transparent" /> : s.enabled ? <EyeOff className="icon-sm"/> : <Eye className="icon-sm"/>}</button>
+                      <button className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-50" onClick={() => setEditing(s)} disabled={!!busyIds[s.id]} title={t("common.edit")}><Pencil className="icon-sm"/></button>
+                      <button className="btn-ghost p-1.5 text-err hover:text-err/80 disabled:opacity-50" onClick={() => setConfirmDelete(s)} disabled={!!busyIds[s.id]} title={t("common.delete")}>{busyIds[s.id] === "delete" ? <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-err border-t-transparent" /> : <Trash2 className="icon-sm"/>}</button>
+                    </div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -217,15 +262,18 @@ export function Skills() {
                       </div>
                     )}
                   </div>
-                  <span className={s.enabled ? "badge-ok" : "badge-mute"}>
-                    {s.enabled ? t("common.enabled") : t("common.disabled")}
-                  </span>
                 </div>
-                {s.enabled && (
-                  <div className="mt-2 flex items-center gap-1 text-2xs text-ok">
-                    <Link2 className="icon-xs"/>{t("skills.symlinked_to", { list: targets.filter(t => t.enabled).map(t => t.name).join(" / ") || t("skills.no_target") })}
-                  </div>
-                )}
+                {(() => {
+                  const symNames = targets.filter(t => t.enabled).map(t => t.name);
+                  const symDisplay = symNames.length > 2
+                    ? symNames.slice(0, 2).join(" / ") + ` ... +${symNames.length - 2}`
+                    : symNames.join(" / ") || null;
+                  return symDisplay ? (
+                    <div className="mt-2 flex items-center gap-1 text-2xs text-ok">
+                      <Link2 className="icon-xs"/>{t("skills.symlinked_to", { list: symDisplay })}
+                    </div>
+                  ) : null;
+                })()}
                 <div className="mt-3 flex items-center justify-between">
                   <div className="text-2xs text-fg-muted">{new Date(s.updated_at).toLocaleString()}</div>
                   <div className="flex gap-1">
@@ -291,17 +339,21 @@ export function Skills() {
         <div className="text-xs text-fg-muted">
           {t("skills.targets_desc")}
         </div>
-        <div className="space-y-2">
-          {targets.map((tg) => (
-            <TargetRow
-              key={tg.id}
-              target={tg}
-              onReload={load}
-              onAskDelete={(t) => setConfirmTargetDelete(t)}
-              onAskEdit={(t) => setEditingTarget(t)}
-            />
-          ))}
-        </div>
+        {targets.length === 0 ? (
+          <EmptyHint>{t("skills.targets_empty")}</EmptyHint>
+        ) : (
+          <div className="space-y-2">
+            {targets.map((tg) => (
+              <TargetRow
+                key={tg.id}
+                target={tg}
+                onReload={load}
+                onAskDelete={(t) => setConfirmTargetDelete(t)}
+                onAskEdit={(t) => setEditingTarget(t)}
+              />
+            ))}
+          </div>
+        )}
       </Section>
 
       {addTargetOpen && (
