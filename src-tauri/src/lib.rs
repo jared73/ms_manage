@@ -35,6 +35,7 @@ use tauri::{
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let start_minimized = std::env::args().any(|arg| arg == "--minimized");
     let state = Arc::new(AppState::initialize().expect("failed to init app state"));
     state.clone().install_as_current();
 
@@ -52,6 +53,10 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized"]),
+        ))
         .manage(state.clone())
         .setup(move |app| {
             // 跟 mcp-router 一样：GUI 起来 = 代理起来，关 GUI = 代理死。
@@ -59,16 +64,19 @@ pub fn run() {
             // 失败要打日志，不能静默吞。
             let st = state.clone();
             let handle = app.handle().clone();
+            let proxy_started = tauri::async_runtime::block_on(proxy::start(&handle, &st));
+            if let Err(e) = &proxy_started {
+                eprintln!("[ms-manage] auto-start proxy failed: {e}");
+            }
+
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = proxy::start(&handle, &st).await {
-                    eprintln!("[ms-manage] auto-start proxy failed: {e}");
-                }
-                // 自动启动所有 enabled 且 auto_start 的 servers
-                if let Ok(servers) = st.storage.load_servers() {
-                    for srv in servers {
-                        if srv.enabled && srv.auto_start.unwrap_or(false) {
-                            if let Err(e) = proxy::start_one(&srv).await {
-                                eprintln!("[auto-start] failed to start {}: {}", srv.name, e);
+                if proxy_started.is_ok() {
+                    if let Ok(servers) = st.storage.load_servers() {
+                        for srv in servers {
+                            if srv.enabled && srv.auto_start.unwrap_or(false) {
+                                if let Err(e) = proxy::start_one(&srv).await {
+                                    eprintln!("[auto-start] failed to start {}: {}", srv.name, e);
+                                }
                             }
                         }
                     }
@@ -113,6 +121,12 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            if start_minimized {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.hide()?;
+                }
+            }
 
             Ok(())
         })

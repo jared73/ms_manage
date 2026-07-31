@@ -15,6 +15,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 fn pid_file_path(data_dir: &Path) -> PathBuf {
     data_dir.join("ms-manage.pid")
@@ -43,11 +44,10 @@ pub fn kill_previous_instance(data_dir: &Path) -> bool {
 
     let killed = try_kill(pid);
     if killed {
-        // 给旧进程一点点时间彻底退出（释放端口、文件锁等）
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        // 保险起见再杀一次 —— 万一旧进程还在收尾
-        let _ = try_kill(pid);
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while is_process_alive(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     // 不管杀没杀掉都清掉文件，避免下次启动读到一个死 PID
     let _ = fs::remove_file(&path);
@@ -59,6 +59,31 @@ pub fn write_pid_file(data_dir: &Path) {
     let path = pid_file_path(data_dir);
     // 父目录由 AppState::initialize() 保证了，这里只管写文件
     let _ = fs::write(&path, std::process::id().to_string());
+}
+
+#[cfg(target_os = "windows")]
+fn is_process_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .map(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stdout)
+                    .split(',')
+                    .nth(1)
+                    .map(|value| value.trim_matches('"').trim() == pid.to_string())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_process_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]

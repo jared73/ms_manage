@@ -86,9 +86,6 @@ export function Servers() {
   const [probingIds, setProbingIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
-  // 安装进度 + 批量流程(独立 hook)
-  const install = useInstallFlow();
-
   // ---- 数据加载 ----
   const load = async () => {
     try {
@@ -100,6 +97,10 @@ export function Servers() {
       toast.error(t("servers.toast_load_failed", { msg: describeError(e) }) as string);
     }
   };
+
+  // 安装进度 + 批量流程(独立 hook)。load 在 useInstallFlow 之前定义,
+  // 单装/卸载完成后由 hook 回调触发列表刷新。
+  const install = useInstallFlow(load);
 
   useEffect(() => {
     void load();

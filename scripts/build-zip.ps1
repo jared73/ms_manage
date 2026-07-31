@@ -5,9 +5,12 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $releaseExe  = Join-Path $projectRoot 'src-tauri\target\release\ms_manage.exe'
 $outDir      = Join-Path $projectRoot 'dist-zip'
-$version     = '0.1.0'
-$zipName     = "MS-Manage-v$version-win-x64.zip"
-$zipPath     = Join-Path $outDir $zipName
+
+# 版本号单一来源：package.json（与 bump-version.cjs 保持一致）
+$pkg = Get-Content (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json
+$version = $pkg.version
+$zipName = "MS-Manage-v$version-win-x64.zip"
+$zipPath = Join-Path $outDir $zipName
 
 if (-not (Test-Path $releaseExe)) {
   Write-Error ("Not found: $releaseExe -- run `cargo build --release --manifest-path src-tauri/Cargo.toml` first.")
@@ -34,14 +37,17 @@ if (Test-Path (Join-Path $projectRoot 'e2e')) {
 }
 
 # Quick setup guide —— 从独立 UTF-8 模板文件 copy（避免 PowerShell here-string 丢中文字符）
+# 模板里的 {VERSION} 占位符会被替换成当前版本号
 $template = Join-Path $PSScriptRoot 'QUICKSTART.template.txt'
+$quickstart = Join-Path $stage 'QUICKSTART.txt'
 if (Test-Path $template) {
-    Copy-Item $template (Join-Path $stage 'QUICKSTART.txt')
+    $body = (Get-Content $template -Raw -Encoding UTF8).Replace('{VERSION}', $version)
+    [System.IO.File]::WriteAllText($quickstart, $body, [System.Text.UTF8Encoding]::new($false))
 } else {
     # 兜底：如果模板文件丢了，写个最小的
     [System.IO.File]::WriteAllText(
-        (Join-Path $stage 'QUICKSTART.txt'),
-        "MS Manage v0.1.0`nRun ms_manage.exe to start.`n",
+        $quickstart,
+        "MS Manage v$version`nRun ms_manage.exe to start.`n",
         [System.Text.UTF8Encoding]::new($false)
     )
 }

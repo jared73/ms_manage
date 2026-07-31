@@ -51,13 +51,18 @@ export interface UseInstallFlow {
 
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 
-export function useInstallFlow(): UseInstallFlow {
+export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
   const { t } = useTranslation();
   const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
   const [uninstallingIds, setUninstallingIds] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Record<string, Progress>>({});
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // 单装/卸载完成后刷新列表的钩子。用 ref 固定，避免闭包持有过期值；
+  // 批量模式跳过（batchRunningRef 为 true 时由 runBatch 自行 reload，避免 N 次全量重取）。
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
 
   // 批量安装进行中跳过 install_progress 的 load()(避免 N 次全量 3-IPC 重取)
   const batchRunningRef = useRef(false);
@@ -105,6 +110,10 @@ export function useInstallFlow(): UseInstallFlow {
         if (resolver) {
           resolver({ ok: stage === "done", message });
           resolvers.delete(id);
+        }
+        // 单装/卸载走到终态后通知页面刷新列表（批量模式由 runBatch 统一 reload）。
+        if (!batchRunningRef.current) {
+          onSettledRef.current?.();
         }
       }
     }).then((fn) => {

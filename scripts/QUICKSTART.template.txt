@@ -1,4 +1,4 @@
-MS Manage v0.1.0 - Windows 绿色版
+MS Manage v{VERSION} - Windows 绿色版
 
 【1】解压到任意目录（路径最好不含中文 / 空格）
 
