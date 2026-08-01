@@ -32,6 +32,36 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
     outDir: "dist",
     emptyOutDir: true,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        // 把大体积依赖拆成单独 chunk,避免主 chunk > 500KB 警告;
+        // 也便于浏览器缓存复用(版本不变就不重新下载这些 chunk)。
+        manualChunks: {
+          "monaco-editor": ["monaco-editor", "@monaco-editor/react"],
+          "react-i18next": ["i18next", "react-i18next"],
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          "tauri-api": [
+            "@tauri-apps/api",
+            "@tauri-apps/plugin-dialog",
+            "@tauri-apps/plugin-fs",
+            "@tauri-apps/plugin-http",
+            "@tauri-apps/plugin-shell",
+            "@tauri-apps/plugin-store",
+            "@tauri-apps/plugin-autostart",
+          ],
+          "ui-vendor": [
+            "lucide-react",
+            "clsx",
+            "tailwind-merge",
+            "sonner",
+            "dompurify",
+            "marked",
+            "zustand",
+          ],
+        },
+      },
+    },
   },
   resolve: {
     alias: {

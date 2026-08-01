@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, Check, Search, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";
@@ -35,7 +35,7 @@ export function Market() {
     setInstalledIds(ids);
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true);
@@ -50,8 +50,8 @@ export function Market() {
       inFlight.current = false;
       setLoading(false);
     }
-  };
-  useEffect(() => { void load(); }, [tab]);
+  }, [tab]);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return items;

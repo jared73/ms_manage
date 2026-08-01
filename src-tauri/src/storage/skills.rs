@@ -209,6 +209,20 @@ pub fn reconcile_symlinks(skills: &[StoredSkill], targets: &[SkillTarget]) -> Re
                 if let Ok(current) = std::fs::read_link(&link) {
                     if &current == src { continue; }
                     let _ = symlink::remove_link(&link);
+                } else if symlink::is_link(&link) {
+                    // 是链接但 read_link 失败（悬空），重建
+                    let _ = symlink::remove_link(&link);
+                } else {
+                    // 不是链接而是普通目录：junction 失败残留的空目录，
+                    // 或用户手动放置的同名目录。空目录直接清除重建；
+                    // 非空目录视为用户内容，跳过并提示。
+                    let empty = link.read_dir().map(|mut r| r.next().is_none()).unwrap_or(false);
+                    if empty {
+                        let _ = std::fs::remove_dir(&link);
+                    } else {
+                        eprintln!("[skills] skip link {:?}: existing non-empty directory", link);
+                        continue;
+                    }
                 }
             }
             if let Err(e) = symlink::create_dir_link(&link, src) {

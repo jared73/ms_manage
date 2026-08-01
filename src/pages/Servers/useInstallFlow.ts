@@ -175,7 +175,7 @@ export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
         toast.error(t("servers.toast_install_fail", { msg: describeError(e) }) as string, { id: `install-${s.id}` });
       }
     },
-    [],
+    [t],
   );
 
   /** 卸载。 */
@@ -192,7 +192,7 @@ export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
       });
       toast.error(t("servers.toast_uninstall_fail", { msg: describeError(e) }) as string, { id: `install-${s.id}` });
     }
-  }, []);
+  }, [t]);
 
   const openConfirm = useCallback((pending: McpServer[]) => {
     if (pending.length === 0) {
@@ -200,7 +200,7 @@ export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
       return;
     }
     setConfirmOpen(true);
-  }, []);
+  }, [t]);
 
   const closeConfirm = useCallback(() => setConfirmOpen(false), []);
 
@@ -289,7 +289,7 @@ export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
         setBatch((b) => (b && b.done === b.total ? null : b));
       }, 8000);
     },
-    [waitForInstallDone],
+    [waitForInstallDone, t],
   );
 
   return {

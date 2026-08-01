@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub mod servers;
 pub mod skills;
 pub mod logs;
+pub mod memories;
 
 /// 把 `contents` 原子写到 `path`：先写临时文件 + fsync，再 rename 到目标。
 /// 避免写入中途崩溃/断电导致文件截断（之前直接 `std::fs::write` 容易出现 0 字节或半截文件）。
@@ -147,6 +148,25 @@ pub struct StoredSkill {
     /// skill 目录下相对 SKILL.md 的所有文件路径（用于前端展示目录结构）
     #[serde(default)]
     pub files: Vec<String>,
+}
+
+/// 全局记忆文件条目：Markdown 主副本内联存储，target_path 是工具真实读取的绝对路径。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMemory {
+    pub id: String,
+    pub name: String,                  // 工具显示名（opencode / Claude Code / …）
+    #[serde(default)]
+    pub description: Option<String>,
+    pub target_path: String,           // 同步目标绝对路径（如 ~/.config/opencode/AGENTS.md）
+    #[serde(default = "default_true")]
+    pub enabled: bool,                 // 启用时主副本复制到 target_path
+    #[serde(default)]
+    pub builtin: bool,                 // 预设条目不能删（只能 toggle / 编辑内容与路径）
+    pub content: String,               // 主副本 Markdown 内容
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +345,45 @@ pub fn merge_builtin_skill_targets(existing: &mut Vec<SkillTarget>) {
     }
 }
 
+/// 内置的「全局记忆文件」预设（各 AI 工具的全局指令/规则文件路径）。
+/// 默认全部 disabled —— 首次启用时才写入目标文件，且优先拉取已有内容。
+pub fn default_memory_presets() -> Vec<StoredMemory> {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mut out = Vec::new();
+    let now = String::new();
+    let add = |out: &mut Vec<StoredMemory>, id: &str, name: &str, desc: &str, rel: std::path::PathBuf| {
+        let content = memories::default_template(name);
+        out.push(StoredMemory {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some(desc.to_string()),
+            target_path: rel.to_string_lossy().to_string(),
+            enabled: false,
+            builtin: true,
+            content,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        });
+    };
+    add(&mut out, "opencode", "opencode", "全局 AGENTS.md", home.join(".config").join("opencode").join("AGENTS.md"));
+    add(&mut out, "claude-code", "Claude Code", "全局 CLAUDE.md", home.join(".claude").join("CLAUDE.md"));
+    add(&mut out, "codex", "Codex", "全局 AGENTS.md", home.join(".codex").join("AGENTS.md"));
+    add(&mut out, "copilot", "GitHub Copilot", "全局自定义指令", home.join(".github").join("copilot-instructions.md"));
+    out
+}
+
+/// 合并缺失的 builtin 记忆预设到已有列表（升级后自动补新预设，不重复、不覆盖用户数据）
+pub fn merge_builtin_memories(existing: &mut Vec<StoredMemory>) {
+    let defaults = default_memory_presets();
+    for d in defaults {
+        if existing.iter().any(|e| e.id == d.id) {
+            // 已存在：仅当用户从未改过目标路径（还是旧预设路径）时，允许预设路径漂移修正
+            continue;
+        }
+        existing.push(d);
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProxyStats {
     pub running: bool,
@@ -345,12 +404,16 @@ pub struct Storage {
     /// servers.json 文件读写互斥锁。
     /// 保护所有对 servers.json 的整体读-改-写，避免后台迁移与 GUI 写回互相覆盖。
     pub servers_lock: Arc<RwLock<()>>,
+    /// memories.json 文件读写互斥锁。
+    pub memories_lock: Arc<RwLock<()>>,
     /// projects.json 文件读写互斥锁。
     pub projects_lock: Arc<RwLock<()>>,
     /// settings.json 内存缓存 —— proxy 每个请求都要比对 token,
     /// 每次都 fs::read+serde_json::from_str+可能的原子写,既慢又有并发风险。
     /// 第一次 load 时落盘,后续命中缓存;save 时 invalidate 一次。
     pub settings_cache: Arc<RwLock<Option<StoredSettings>>>,
+    /// memories.json 内存缓存 —— 与 settings_cache 同模式。
+    pub memories_cache: Arc<RwLock<Option<Vec<StoredMemory>>>>,
     /// servers.json 内存缓存 —— `tools/list` 热路径每次都调 `load_servers()`,
     /// Claude Desktop / Cursor / Cline 这类客户端秒级高频调用,每次 fs::read+from_str
     /// 会成为瓶颈。跟 settings_cache 同模式:命中直接 clone,没命中才读盘 + 解析,
@@ -368,12 +431,16 @@ impl Storage {
             logs: Arc::new(RwLock::new(Vec::new())),
             proxy_stats: Arc::new(RwLock::new(ProxyStats::default())),
             servers_lock: Arc::new(RwLock::new(())),
+            memories_lock: Arc::new(RwLock::new(())),
             projects_lock: Arc::new(RwLock::new(())),
             settings_cache: Arc::new(RwLock::new(None)),
             servers_cache: Arc::new(RwLock::new(None)),
+            memories_cache: Arc::new(RwLock::new(None)),
         };
         // 一次性把老的单 .md skill 迁移到目录制
         skills::migrate_legacy_flat_files(&storage.skills_dir()).ok();
+        // 预热 memories_cache（冷启动竞态防护，同 settings_cache）
+        let _ = storage.load_memories();
         // 启动时同步一遍 symlink（保证 enabled 状态与文件系统一致）
         // 同时预热 settings_cache:
         // - 让冷启动 race(UI get_settings 与 proxy first request 同时命中慢路径各自落盘)
@@ -392,6 +459,7 @@ impl Storage {
     pub fn projects_file(&self) -> PathBuf { self.root.join("projects.json") }
     pub fn settings_file(&self) -> PathBuf { self.root.join("settings.json") }
     pub fn log_file(&self) -> PathBuf { self.root.join("logs.json") }
+    pub fn memories_file(&self) -> PathBuf { self.root.join("memories.json") }
 
     pub fn load_servers(&self) -> Result<Vec<StoredServer>> {
         // 命中缓存就直接 clone 返回 —— 代理 tools/list 热路径(秒级高频)不再走 IO。
@@ -470,6 +538,81 @@ impl Storage {
         list.retain(|s| s.id != id);
         servers::save(&self.servers_file(), &list)?;
         *self.servers_cache.write() = Some(list);
+        Ok(())
+    }
+
+    pub fn load_memories(&self) -> Result<Vec<StoredMemory>> {
+        {
+            let cache = self.memories_cache.read();
+            if let Some(list) = cache.as_ref() {
+                return Ok(list.clone());
+            }
+        }
+        let _guard = self.memories_lock.read();
+        let mut list = if self.memories_file().exists() {
+            let raw = std::fs::read_to_string(self.memories_file())?;
+            serde_json::from_str(&raw).unwrap_or_else(|e| {
+                eprintln!("[storage] memories.json 解析失败（{e}），使用空列表");
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        // 合并缺失的 builtin 预设（升级后自动补新工具），落盘 + 填缓存
+        let before = list.len();
+        merge_builtin_memories(&mut list);
+        let mut changed = list.len() != before;
+        // 内置预设：目标文件已存在且主副本还是初始模板 → 读入真实内容并启用
+        for m in list.iter_mut() {
+            if memories::upgrade_preset_from_disk(m) {
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = atomic_write_json(&self.memories_file(), &list);
+        }
+        *self.memories_cache.write() = Some(list.clone());
+        Ok(list)
+    }
+    pub fn save_memories(&self, list: &[StoredMemory]) -> Result<()> {
+        let _guard = self.memories_lock.write();
+        atomic_write_json(&self.memories_file(), list)?;
+        *self.memories_cache.write() = Some(list.to_vec());
+        Ok(())
+    }
+    /// 原子地 upsert（更新或插入）一条记忆条目。返回 true 表示更新已有，false 表示新增。
+    pub fn upsert_memory(&self, m: &StoredMemory) -> Result<bool> {
+        let _guard = self.memories_lock.write();
+        let mut list: Vec<StoredMemory> = if self.memories_file().exists() {
+            let raw = std::fs::read_to_string(self.memories_file())?;
+            serde_json::from_str(&raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let updated;
+        if let Some(slot) = list.iter_mut().find(|x| x.id == m.id) {
+            *slot = m.clone();
+            updated = true;
+        } else {
+            list.push(m.clone());
+            updated = false;
+        }
+        atomic_write_json(&self.memories_file(), &list)?;
+        *self.memories_cache.write() = Some(list);
+        Ok(updated)
+    }
+    /// 原子地删除一条记忆条目。
+    pub fn remove_memory(&self, id: &str) -> Result<()> {
+        let _guard = self.memories_lock.write();
+        let mut list: Vec<StoredMemory> = if self.memories_file().exists() {
+            let raw = std::fs::read_to_string(self.memories_file())?;
+            serde_json::from_str(&raw).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        list.retain(|x| x.id != id);
+        atomic_write_json(&self.memories_file(), &list)?;
+        *self.memories_cache.write() = Some(list);
         Ok(())
     }
 

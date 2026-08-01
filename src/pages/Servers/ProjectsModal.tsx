@@ -38,7 +38,10 @@ export function ProjectsModal({
       toast.error(t("projects.load_failed", { msg: describeError(e) }) as string);
     }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once 加载
+  }, []);
 
   const handleSave = async (p: Project) => {
     const name = p.name.trim();
@@ -53,7 +56,7 @@ export function ProjectsModal({
       setCreating(false);
       await load();
       await onChanged();
-      toast.success(t("projects.saved") as string, { duration: 1500 });
+      toast.success(t("projects.saved") as string);
     } catch (e) {
       toast.error(t("projects.save_failed", { msg: describeError(e) }) as string);
     } finally {
@@ -68,7 +71,7 @@ export function ProjectsModal({
       await deleteProject(p.id);
       await load();
       await onChanged();
-      toast.success(t("projects.deleted", { name: p.name }) as string, { duration: 2000 });
+      toast.success(t("projects.deleted", { name: p.name }) as string);
       setConfirmDelete(null);
     } catch (e) {
       toast.error(t("projects.delete_failed", { msg: describeError(e) }) as string);

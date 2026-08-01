@@ -5,6 +5,8 @@ src-tauri/Cargo.lock
 # Node
 node_modules/
 dist/
+dist-portable/
+dist-zip/
 .vite/
 .npm/
 .pnpm-store/

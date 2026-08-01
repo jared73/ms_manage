@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
-  Server, Zap, Activity, Wrench, ChevronDown, ChevronRight,
+  Server, Zap, Activity, Wrench, ChevronDown,
   Share2, Plus, ArrowRight, Blocks,
 } from "lucide-react";
 import { Section, EmptyHint } from "@/components/Section";

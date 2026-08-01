@@ -186,21 +186,33 @@ async fn handle_tools_call(storage: &Storage, id: Option<Value>, params: Value) 
             return jsonrpc_error(id, -32603, format!("flush {server_name}: {e}"));
         }
 
-        // 读取响应（带超时）。过滤掉子 server 在响应前发的 notification / 日志行。
-        super::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await
+        // 读到「id 与 call_id 匹配」的响应才返回。跳过 pending 里残留的
+        // 上一次超时请求后到的错配响应，避免把旧响应错配给当前请求。
+        loop {
+            match super::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await {
+                Ok(Some((rid, v))) => {
+                    if rid == serde_json::json!(call_id) {
+                        break Some(v);
+                    }
+                }
+                Ok(None) => break None,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    return jsonrpc_error(id, -32603, format!("timeout waiting for {server_name}"));
+                }
+                Err(e) => {
+                    return jsonrpc_error(id, -32603, format!("read {server_name}: {e}"));
+                }
+            }
+        }
     };
     match read {
-        Ok(Some((_id, mut v))) => {
+        Some(mut v) => {
             // 把子 server 的 id 替换成 client 的 id
             if let Some(obj) = v.as_object_mut() {
                 obj.insert("id".into(), id.clone().unwrap_or(Value::Null));
             }
             Some(v)
         }
-        Ok(None) => jsonrpc_error(id, -32603, format!("{server_name} 子进程已关闭")),
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            jsonrpc_error(id, -32603, format!("timeout waiting for {server_name}"))
-        }
-        Err(e) => jsonrpc_error(id, -32603, format!("read {server_name}: {e}")),
+        None => jsonrpc_error(id, -32603, format!("{server_name} 子进程已关闭")),
     }
 }

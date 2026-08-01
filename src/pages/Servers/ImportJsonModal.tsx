@@ -16,7 +16,8 @@ export function ImportJsonModal({
   onImported,
 }: {
   onClose: () => void;
-  onImported: () => Promise<void>;
+  /** 导入成功回调,携带本次导入的服务名列表(供父级自动探测/启动) */
+  onImported: (names: string[]) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [raw, setRaw] = useState("");
@@ -53,13 +54,15 @@ export function ImportJsonModal({
     if (!parsed || parsed.length === 0) return;
     setImporting(true);
     let count = 0;
+    const importedNames: string[] = [];
     try {
       for (const { name, conf } of parsed) {
         await upsertServer(buildImportedServer(name, conf));
         count++;
+        importedNames.push(name);
       }
       toast.success(t("servers.toast_imported", { count }) as string);
-      await onImported();
+      await onImported(importedNames);
       onClose();
     } catch (e) {
       toast.error(t("servers.toast_import_failed", { msg: describeError(e) }) as string);

@@ -30,11 +30,11 @@ export function Connections() {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      toast.warning(t("servers.toast_clipboard_failed", { label }) as string, { duration: 4000 });
+      toast.warning(t("servers.toast_clipboard_failed", { label }) as string);
       return;
     }
     setCopied(key);
-    toast.success(t("connections.copied", { label }), { duration: 1500 });
+    toast.success(t("connections.copied", { label }));
   };
 
   const handleReveal = async () => {

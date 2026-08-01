@@ -110,11 +110,11 @@ export function useLogs(): UseLogs {
     try {
       await clearLogs();
       await silentReload();
-      toast.success(t("logs.cleared"), { duration: 1500 });
+      toast.success(t("logs.cleared"));
     } catch (e) {
       toast.error(t("logs.clear_failed", { msg: describeError(e) }) as string);
     }
-  }, [silentReload]);
+  }, [silentReload, t]);
 
   return {
     logs,

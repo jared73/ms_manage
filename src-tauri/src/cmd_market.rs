@@ -287,7 +287,7 @@ async fn install_skill_from_github(state: &AppState, id: &str, _source_url: &str
 }
 
 fn install_market_server(state: &AppState, id: &str) -> Result<String, String> {
-    let mut list = state.storage.load_servers().map_err(|e| e.to_string())?;
+    let list = state.storage.load_servers().map_err(|e| e.to_string())?;
     // 仅当已有记录带 "market" tag 时才复用，否则视为同名但不同配置的自建 server。
     if let Some(existing) = list.iter().find(|s| s.name == id && s.tags.iter().any(|t| t == "market")) {
         return Ok(existing.id.clone());
@@ -304,7 +304,7 @@ fn install_market_server(state: &AppState, id: &str) -> Result<String, String> {
     if id == "context7" { env.insert("CONTEXT7_API_KEY".to_string(), String::new()); }
     let tags = vec!["market".to_string(), id.to_string()];
     let new_id = uuid::Uuid::new_v4().to_string();
-    list.push(StoredServer {
+    let server = StoredServer {
         id: new_id.clone(), name: id.to_string(),
         description: None, transport: "stdio".to_string(),
         command: Some(command), args, env, cwd: None, url: None,
@@ -313,8 +313,11 @@ fn install_market_server(state: &AppState, id: &str) -> Result<String, String> {
         disabled_tools: Vec::new(), created_at: now.clone(), updated_at: now,
         installed: false, installed_version: None, installed_path: None,
         installed_at: None, install_error: None,
-    });
-    state.storage.save_servers(&list).map_err(|e| e.to_string())?;
+    };
+    // 用 upsert_server（内部读-改-写全程持 servers_lock）而不是 load→save_servers：
+    // 后者在 load 与 save 之间不持锁，期间后台 install 任务 mutate_server 写回的
+    // installed 字段会被这份旧列表整体覆盖（丢失更新）。
+    state.storage.upsert_server(&server).map_err(|e| e.to_string())?;
     Ok(new_id)
 }
 

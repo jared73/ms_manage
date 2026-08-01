@@ -194,6 +194,31 @@ export interface ImportSkillResult {
 }
 export const importSkillFromPath = (path: string) => invoke<ImportSkillResult>("import_skill_from_path", { path });
 
+// ---- 全局记忆文件 ----
+export interface Memory {
+  id: string;
+  name: string;
+  description?: string;
+  target_path: string;         // 工具真实读取的绝对路径
+  enabled: boolean;
+  builtin: boolean;
+  content: string;             // 主副本 Markdown
+  created_at: string;
+  updated_at: string;
+  // 派生：同步状态（后端实时探测）
+  target_exists?: boolean;
+  in_sync?: boolean;
+  target_mtime?: string | null;
+}
+export const listMemories = () => invoke<Memory[]>("list_memories");
+export const getMemory = (id: string) => invoke<Memory>("get_memory", { id });
+export const upsertMemory = (memory: Memory) => invoke<Memory>("upsert_memory", { memory });
+export const deleteMemory = (id: string) => invoke<void>("delete_memory", { id });
+export const toggleMemory = (id: string, enabled: boolean) => invoke<Memory>("toggle_memory", { id, enabled });
+export const syncMemoryToTarget = (id: string) => invoke<Memory>("sync_memory_to_target", { id });
+export const pullMemoryFromTarget = (id: string) => invoke<Memory>("pull_memory_from_target", { id });
+export const openMemoryTargetDir = (id: string) => invoke<void>("open_memory_target_dir", { id });
+
 // ---- Proxy ----
 export const getProxyStatus = () => invoke<ProxyStatus & { last_request_at?: string }>("get_proxy_status");
 export const getRouterConfig = () => invoke<{

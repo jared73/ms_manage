@@ -92,45 +92,61 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<AppState>) -> anyhow::Res
     const MAX_HEADER_LINE: usize = 8192;
     const MAX_HEADERS: usize = 64;
 
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).await?;
-    if request_line.len() > MAX_REQUEST_LINE {
-        anyhow::bail!("request line too long: {} bytes", request_line.len());
-    }
-    let mut headers = std::collections::HashMap::new();
-    let mut content_length: usize = 0;
-    let mut header_count = 0usize;
-    loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 || line == "\r\n" || line == "\n" { break; }
-        header_count += 1;
-        if header_count > MAX_HEADERS {
-            anyhow::bail!("too many headers: >{MAX_HEADERS}");
-        }
-        if line.len() > MAX_HEADER_LINE {
-            anyhow::bail!("header line too long: {} bytes", line.len());
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            let k = k.trim().to_lowercase();
-            let v = v.trim().to_string();
-            if k == "content-length" {
-                // 安全:
-                // - 拒绝非纯 ASCII 数字(防 "1234abc" 之类脏数据被 silent 接受)
-                // - 超过 MAX_BODY_BYTES(16 MB)直接 bail,避免 vec![] 触发 OOM
-                // - 即使攻击者送极小值也走正常逻辑(saturating_to usize 在小值场景无意义)
-                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
-                    anyhow::bail!("invalid Content-Length: {:?}", v);
-                }
-                let n: u64 = v.parse().context("Content-Length parse")?;
-                if n > MAX_BODY_BYTES as u64 {
-                    anyhow::bail!("Content-Length {} exceeds MAX_BODY_BYTES {}", n, MAX_BODY_BYTES);
-                }
-                content_length = n as usize;
+    // 头部读取整体超时：本机进程可以开一个 TCP 连接但不发任何数据，
+    // 没有超时的话连接会永久占一个 tokio task（SSE session 有 idle 清理，
+    // 这里补齐普通 POST 连接的治理）。
+    const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    let (request_line, headers, content_length) = tokio::time::timeout(
+        HEADER_READ_TIMEOUT,
+        async {
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).await?;
+            if request_line.len() > MAX_REQUEST_LINE {
+                anyhow::bail!("request line too long: {} bytes", request_line.len());
             }
-            headers.insert(k, v);
-        }
-    }
+            let mut headers = std::collections::HashMap::new();
+            let mut content_length: usize = 0;
+            let mut header_count = 0usize;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).await?;
+                if n == 0 || line == "\r\n" || line == "\n" { break; }
+                header_count += 1;
+                if header_count > MAX_HEADERS {
+                    anyhow::bail!("too many headers: >{MAX_HEADERS}");
+                }
+                if line.len() > MAX_HEADER_LINE {
+                    anyhow::bail!("header line too long: {} bytes", line.len());
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    let k = k.trim().to_lowercase();
+                    let v = v.trim().to_string();
+                    if k == "content-length" {
+                        // 安全:
+                        // - 拒绝非纯 ASCII 数字(防 "1234abc" 之类脏数据被 silent 接受)
+                        // - 超过 MAX_BODY_BYTES(16 MB)不在这里 bail,而是记一个
+                        //   哨兵值(MAX_BODY_BYTES+1),让下方统一的 413 分支响应。
+                        //   之前直接 bail 会让客户端收到裸连接关闭而非干净的 413。
+                        // - 即使攻击者送极小值也走正常逻辑。
+                        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                            anyhow::bail!("invalid Content-Length: {:?}", v);
+                        }
+                        let n: u64 = v.parse().context("Content-Length parse")?;
+                        content_length = if n > MAX_BODY_BYTES as u64 {
+                            MAX_BODY_BYTES + 1
+                        } else {
+                            n as usize
+                        };
+                    }
+                    headers.insert(k, v);
+                }
+            }
+            Ok::<_, anyhow::Error>((request_line, headers, content_length))
+        },
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("读取请求头超时"))??;
 
     // 解析 query string（用于 token 鉴权 + session_id 路由）
     let mut query_token = String::new();
@@ -540,6 +556,12 @@ async fn http_tools_list(state: &AppState, id: Option<serde_json::Value>) -> ser
                 let mut t = tool.clone();
                 if let Some(obj) = t.as_object_mut() {
                     obj.insert("name".into(), serde_json::Value::String(format!("{}__{}", s.name, orig_name)));
+                    // 与 stdio 模式一致：给 description 加 [server] 前缀，
+                    // 客户端一眼能看出工具来自哪个子 server。
+                    let desc = obj.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    obj.insert("description".into(), serde_json::Value::String(
+                        format!("[{}] {}", s.name, desc)
+                    ));
                 }
                 all_tools.push(t);
             }
@@ -605,10 +627,32 @@ async fn http_tools_call(state: &AppState, id: Option<serde_json::Value>, params
             });
         }
         let _ = io.stdin.flush().await;
-        crate::proxy::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await
+        // 读到「id 与 call_id 匹配」的响应才返回。
+        // 之前拿到第一条带 id 的帧就返回 —— 若 pending 缓冲里残留上一次
+        // 超时请求后到的响应（id 是旧请求的），会错配给当前请求。
+        // 这里循环跳过不匹配的帧，直到拿到正确 id 或超时/EOF。
+        loop {
+            match crate::proxy::read_response_from_child(&mut *io, std::time::Duration::from_secs(120)).await {
+                Ok(Some((rid, v))) => {
+                    if rid == serde_json::json!(call_id) {
+                        break Some(v);
+                    }
+                    log("debug", "mcp.tools", format!("tools/call {server_name}__{tool_name} 跳过错配响应 id {rid}（期望 {call_id}）"), None);
+                }
+                Ok(None) => break None,
+                Err(e) => {
+                    let timed_out = e.kind() == std::io::ErrorKind::TimedOut;
+                    log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} {}", if timed_out { "超时".to_string() } else { format!("读取失败：{e}") }), None);
+                    return serde_json::json!({
+                        "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
+                        "error": { "code": -32603, "message": if timed_out { "timeout".to_string() } else { format!("read {server_name}: {e}") } }
+                    });
+                }
+            }
+        }
     };
     match read {
-        Ok(Some((_id, mut v))) => {
+        Some(mut v) => {
             let is_err = v.get("error").is_some()
                 || v.get("result").and_then(|r| r.get("isError")).and_then(|b| b.as_bool()).unwrap_or(false);
             log("debug", "mcp.tools", format!("tools/call {server_name}__{tool_name} {}", if is_err { "→ 错误" } else { "→ 成功" }), None);
@@ -618,23 +662,12 @@ async fn http_tools_call(state: &AppState, id: Option<serde_json::Value>, params
             }
             v
         }
-        Ok(None) => {
+        None => {
             log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 子进程已关闭"), None);
             serde_json::json!({
                 "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
                 "error": { "code": -32603, "message": format!("{server_name} 子进程已关闭") }
             })
         }
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            log("warn", "mcp.tools", format!("tools/call {server_name}__{tool_name} 超时"), None);
-            serde_json::json!({
-                "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-                "error": { "code": -32603, "message": "timeout" }
-            })
-        }
-        Err(e) => serde_json::json!({
-            "jsonrpc": "2.0", "id": id.unwrap_or(serde_json::Value::Null),
-            "error": { "code": -32603, "message": format!("read {server_name}: {e}") }
-        }),
     }
 }

@@ -75,7 +75,7 @@ export function ServerFormModal({
     try {
       await upsertServer({ ...s, args, env, updated_at: new Date().toISOString() });
       await onSaved();
-      toast.success(t("servers.toast_saved", { name: s.name }) as string, { duration: 1500 });
+      toast.success(t("servers.toast_saved", { name: s.name }) as string);
     } catch (e) {
       toast.error(t("servers.toast_save_failed", { msg: describeError(e) }) as string);
     } finally {
@@ -286,20 +286,4 @@ export function ServerFormModal({
       </div>
     </Modal>
   );
-}
-
-/** 给"新建"按钮用的空白 server。 */
-export function blankServer(): McpServer {
-  const now = new Date().toISOString();
-  return {
-    id: crypto.randomUUID(),
-    name: "",
-    transport: "stdio",
-    command: "",
-    args: [],
-    env: {},
-    enabled: true,
-    created_at: now,
-    updated_at: now,
-  };
 }

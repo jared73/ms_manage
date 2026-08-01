@@ -55,7 +55,10 @@ export function Skills() {
       toast.error(t("skills.load_failed", { msg: describeError(e) }) as string);
     }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once 加载
+  }, []);
   const [confirmDelete, setConfirmDelete] = useState<Skill | null>(null);
   const [confirmTargetDelete, setConfirmTargetDelete] = useState<SkillTarget | null>(null);
   const [editingTarget, setEditingTarget] = useState<SkillTarget | null>(null);
@@ -91,6 +94,7 @@ export function Skills() {
       }
     })();
     return () => { aborted = true; unlisten?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once 注册 Tauri 拖拽 listener
   }, []);
 
   const doImport = async (paths: string[]) => {
@@ -121,7 +125,7 @@ export function Skills() {
     try {
       await deleteSkill(s.id);
       await load();
-      toast.success(t("skills.deleted", { name: s.name }) as string, { duration: 2000 });
+      toast.success(t("skills.deleted", { name: s.name }) as string);
     } catch (e) {
       toast.error(t("skills.delete_failed", { msg: describeError(e) }) as string);
     } finally {
@@ -148,7 +152,7 @@ export function Skills() {
     try {
       await removeSkillTarget(tg.id);
       await load();
-      toast.success(t("skills.target_deleted", { name: tg.name }) as string, { duration: 2000 });
+      toast.success(t("skills.target_deleted", { name: tg.name }) as string);
     } catch (e) {
       toast.error(t("skills.target_delete_failed", { msg: describeError(e) }) as string);
     } finally {

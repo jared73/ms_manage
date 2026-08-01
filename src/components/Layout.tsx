@@ -1,6 +1,6 @@
 import { Outlet, NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LayoutGrid, TerminalSquare, Zap, Share2, ClipboardList, SlidersHorizontal } from "lucide-react";
+import { LayoutGrid, TerminalSquare, Zap, BookOpen, Share2, ClipboardList, SlidersHorizontal } from "lucide-react";
 import { clsx } from "clsx";
 
 interface NavItem {
@@ -14,6 +14,7 @@ const items: NavItem[] = [
   { to: "/",            key: "dashboard",    icon: LayoutGrid,     end: true },
   { to: "/servers",     key: "servers",      icon: TerminalSquare },
   { to: "/skills",      key: "skills",       icon: Zap },
+  { to: "/memories",    key: "memories",     icon: BookOpen },
   { to: "/connections", key: "connections",  icon: Share2 },
   { to: "/logs",        key: "logs",         icon: ClipboardList },
   { to: "/settings",    key: "settings",     icon: SlidersHorizontal },
@@ -57,7 +58,7 @@ export function Layout() {
           ))}
         </nav>
         <div className="border-t border-border px-4 py-3 text-2xs text-fg-muted">
-          v{__APP_VERSION__ ?? "0.3.0"}
+          v{__APP_VERSION__ ?? "1.5.0"}
         </div>
       </aside>
       <main className="flex-1 overflow-auto">

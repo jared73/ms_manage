@@ -50,7 +50,7 @@ export function ServerDetailDrawer({
     try {
       await setToolEnabled(server.id, toolName, enabled);
       await onChanged();
-      toast.success(enabled ? t("servers.toast_tool_enabled", { name: toolName }) as string : t("servers.toast_tool_disabled", { name: toolName }) as string, { duration: 1200 });
+      toast.success(enabled ? t("servers.toast_tool_enabled", { name: toolName }) as string : t("servers.toast_tool_disabled", { name: toolName }) as string);
     } catch (e) {
       setLocalDisabled(prev); // 回滚
       toast.error(t("servers.toast_refresh_failed", { msg: describeError(e) }) as string);
@@ -79,6 +79,7 @@ export function ServerDetailDrawer({
     if (tab === "tools" && (tools === null || Date.now() - toolsFetchedAt > TOOLS_CACHE_TTL_MS)) {
       void loadTools(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅按 tab 触发拉取,tools/TTL 变化故意不重拉
   }, [tab]);
 
   return (

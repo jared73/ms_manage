@@ -6,12 +6,13 @@
  *   信息直接渲染到屏幕上)
  * - 完整 stack 仍然写进后端日志 + 控制台,事后排查不受影响
  * - 文案走 i18n
+ * - ErrorFallback 拆到 ./ErrorFallback.tsx,本文件只剩 ErrorBoundary 类,
+ *   满足 react-refresh 的 fast-refresh 约束
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
-import { AlertTriangle, RefreshCw } from "lucide-react";
 import { logEvent } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
+import { ErrorFallback } from "./ErrorFallback";
 
 interface Props {
   children: ReactNode;
@@ -68,43 +69,4 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!err) return this.props.children;
     return <ErrorFallback label={this.props.label} message={describeError(err)} onRetry={this.handleReload} onHardReload={this.handleHardReload} />;
   }
-}
-
-/** 错误降级 UI,函数组件以便使用 useTranslation。 */
-function ErrorFallback({
-  label,
-  message,
-  onRetry,
-  onHardReload,
-}: {
-  label?: string;
-  message: string;
-  onRetry: () => void;
-  onHardReload: () => void;
-}) {
-  const { t } = useTranslation();
-  const displayLabel = label ?? t("error_boundary.default_label");
-  return (
-    <div className="grid min-h-[60vh] place-items-center p-6">
-      <div className="max-w-md rounded-lg border border-err/40 bg-err/5 p-6 text-sm">
-        <div className="mb-3 flex items-center gap-2 text-err">
-          <AlertTriangle size={18} />
-          <h2 className="text-base font-semibold">{t("error_boundary.title", { label: displayLabel })}</h2>
-        </div>
-        <p className="mb-3 text-fg-muted">{t("error_boundary.desc")}</p>
-        {/* 只显示简短的 message,完整 stack 已写入日志 */}
-        <pre className="mb-4 max-h-32 overflow-auto rounded bg-bg-subtle p-3 text-xs text-fg-muted whitespace-pre-wrap break-all">
-          {message}
-        </pre>
-        <div className="flex gap-2">
-          <button className="btn-primary" onClick={onRetry}>
-            <RefreshCw size={14} /> {t("error_boundary.retry")}
-          </button>
-          <button className="btn-ghost" onClick={onHardReload}>
-            {t("error_boundary.hard_reload")}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }

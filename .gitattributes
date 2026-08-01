@@ -1,0 +1,31 @@
+# 强制 Rust 源文件 LF 行尾，避免 Windows 编辑器引入 CRLF 触发 LF/CRLF 警告。
+# 注意：仓库历史 .rs 文件多为 CRLF，未在本文件中 retroactive 改写。
+# 新文件与新提交请保持 LF。
+*.rs        text eol=lf
+*.toml      text eol=lf
+
+# 文档和前端源：保持 LF
+*.md        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.json      text eol=lf
+*.jsonc     text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.js        text eol=lf
+
+# 二进制一律不规范化
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.icns      binary
+*.exe       binary
+*.zip       binary
+*.gz        binary
+*.pdf       binary

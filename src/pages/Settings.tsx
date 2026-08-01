@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save, FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check } from "lucide-react";
+import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 import { Section } from "@/components/Section";
 import { Modal } from "@/components/Modal";
@@ -65,21 +65,10 @@ export function Settings() {
   // 打开 modal 时,把当时 token 的末 4 位冻结到 local state —— 防止用户输入期间
   // 后端 token 被另一条路径改了(理论上不会,但 modal 期间派生会让占位与校验脱节)。
   const [regenTokenTail, setRegenTokenTail] = useState("");
-  const [saved, setSaved] = useState(false);
   const [autoLaunch, setAutoLaunchState] = useState(false);
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
-  // 保存按钮 busy:避免 save 期间用户连点 N 次触发 N 次 IPC,
-  // 同时让按钮显示 spinner 表明正在写盘。
-  const [saving, setSaving] = useState(false);
-
-  // "已保存" 提示 2000ms 自动收起 —— 卸载时清掉,避免 setState 在已卸载组件上
-  useEffect(() => {
-    if (!saved) return;
-    const handle = window.setTimeout(() => setSaved(false), 2000);
-    return () => window.clearTimeout(handle);
-  }, [saved]);
 
   const runDoctor = async () => {
     setDoctorRunning(true);
@@ -114,7 +103,7 @@ export function Settings() {
     return () => {
       cancelled = true;
     };
-  }, [reloadTick]);
+  }, [reloadTick, t]);
 
   const handleAutoLaunch = async (next: boolean) => {
     if (autoLaunchBusy) return;
@@ -122,26 +111,11 @@ export function Settings() {
     try {
       if (next) { await enableAutostart(); } else { await disableAutostart(); }
       setAutoLaunchState(next);
-      toast.success(t(next ? "settings.autostart_on" : "settings.autostart_off") as string, { duration: 1500 });
+      toast.success(t(next ? "settings.autostart_on" : "settings.autostart_off") as string);
     } catch (e) {
       toast.error(t("settings.autostart_failed", { msg: describeError(e) }) as string);
     } finally {
       setAutoLaunchBusy(false);
-    }
-  };
-
-  const save = async () => {
-    if (!settings || saving) return;
-    setSaving(true);
-    try {
-      await updateSettings(settings);
-      setStoreSettings(settings);
-      setSaved(true);
-      void i18n.changeLanguage(settings.language);
-    } catch (e) {
-      toast.error(t("settings.save_failed", { msg: describeError(e) }) as string);
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -154,7 +128,7 @@ export function Settings() {
     try {
       await updateSettings(updated);
       setStoreSettings(updated);
-      toast.success(t("settings.theme_switched") as string, { duration: 1500 });
+      toast.success(t("settings.theme_switched") as string);
     } catch (e) {
       // 写盘失败时回滚:把本地 state + DOM 都退回旧主题,
       // 否则用户看到的色和下次重启后的色不一致,排查"我明明选了为啥又变了"会很难。
@@ -195,7 +169,7 @@ export function Settings() {
     try {
       const realToken = await revealToken();
       await navigator.clipboard.writeText(realToken);
-      toast.success(t("settings.copied"), { duration: 1200 });
+      toast.success(t("settings.copied"));
     } catch (e) {
       toast.error(t("settings.token_reveal_failed", { msg: describeError(e) }) as string);
     }
@@ -348,7 +322,7 @@ export function Settings() {
                           <button
                             className="btn-ghost shrink-0 p-0.5"
                             title={t("settings.copy_suggestion") as string}
-                            onClick={() => { navigator.clipboard.writeText(it.suggestion!).catch(() => {}); toast.success(t("settings.copied") as string, { duration: 1200 }); }}
+                            onClick={() => { navigator.clipboard.writeText(it.suggestion!).catch(() => {}); toast.success(t("settings.copied") as string); }}
                           >
                             <Copy className="icon-xs"/>
                           </button>

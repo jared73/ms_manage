@@ -51,7 +51,8 @@ import {
 } from "@/lib/ipc";
 import type { McpServer, ServerState, Project } from "@/lib/ipc";
 import { ProjectsModal } from "./ProjectsModal";
-import { ServerFormModal, blankServer } from "./ServerFormModal";
+import { ServerFormModal } from "./ServerFormModal";
+import { blankServer } from "./blankServer";
 import { ImportJsonModal } from "./ImportJsonModal";
 import { ServerDetailDrawer } from "./ServerDetailDrawer";
 import { useInstallFlow } from "./useInstallFlow";
@@ -149,7 +150,7 @@ export function Servers() {
     try {
       await deleteServer(s.id);
       await load();
-      toast.success(t("servers.toast_deleted", { name: s.name }) as string, { duration: 2000 });
+      toast.success(t("servers.toast_deleted", { name: s.name }) as string);
     } catch (e) {
       toast.error(t("servers.toast_delete_failed", { msg: describeError(e) }) as string);
     } finally {
@@ -240,6 +241,39 @@ export function Servers() {
     }
   };
 
+  /**
+   * 导入完成后的刷新:
+   * 1. 自动探测一遍「需要装但还没装」的服务 —— 否则刚导入的服务(upsert 时
+   *    installed 默认为 false)即使本机已装过该包,也只会显示「安装」按钮。
+   * 2. 对本次导入、已装且未运行的服务自动启动(不修改 auto_start)。
+   */
+  const handleImported = useCallback(async (names?: string[]) => {
+    try {
+      const ss = await listServers();
+      const targets = ss.filter((s) => needsInstall(s) && !s.installed);
+      await Promise.allSettled(targets.map((s) => refreshInstallStatus(s.id)));
+    } catch {
+      // 探测失败不影响导入结果,列表照常刷新
+    }
+    await load();
+    if (names && names.length > 0) {
+      try {
+        const [ss, sts] = await Promise.all([listServers(), listServerStates()]);
+        const running = new Set(sts.filter((s) => s.status === "running").map((s) => s.server.id));
+        const toStart = ss.filter(
+          (s) => names.includes(s.name) && s.enabled && s.installed && !running.has(s.id),
+        );
+        if (toStart.length > 0) {
+          await Promise.allSettled(toStart.map((s) => startServer(s.id)));
+          await load();
+        }
+      } catch {
+        // 自动启动失败不打扰用户,列表已刷新
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load 每次 render 重建,useCallback 只需首次捕获的 setter
+  }, []);
+
   const handleDuplicate = async (s: McpServer) => {
     const newName = `${s.name} (Copy)`;
     const clone: McpServer = {
@@ -254,7 +288,7 @@ export function Servers() {
     try {
       await upsertServer(clone);
       await load();
-      toast.success(t("servers.toast_duplicated", { name: s.name, newName }) as string, { duration: 2000 });
+      toast.success(t("servers.toast_duplicated", { name: s.name, newName }) as string);
     } catch (e) {
       toast.error(t("servers.toast_save_failed", { msg: describeError(e) }) as string);
     }
@@ -264,7 +298,7 @@ export function Servers() {
     try {
       const json = buildMcpServersJson([s]);
       await navigator.clipboard.writeText(json);
-      toast.success(t("servers.toast_config_copied", { name: s.name }) as string, { duration: 1500 });
+      toast.success(t("servers.toast_config_copied", { name: s.name }) as string);
     } catch {
       // fallback: trigger download
       const blob = new Blob([buildMcpServersJson([s])], { type: "application/json" });
@@ -355,12 +389,9 @@ export function Servers() {
       clipboardOk = false;
     }
     if (!clipboardOk) {
-      toast.warning(
-        t("servers.toast_clipboard_failed", { label }) as string,
-        { duration: 4000 },
-      );
+      toast.warning(t("servers.toast_clipboard_failed", { label }) as string);
     } else {
-      toast.success(t(successKey, { label }) as string, { duration: 1500 });
+      toast.success(t(successKey, { label }) as string);
     }
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -370,15 +401,6 @@ export function Servers() {
     a.click();
     URL.revokeObjectURL(url);
   }, [t]);
-
-  /** 把单个 server 打成 mcpServers JSON,触发复制 + 下载。 */
-  const exportSingleToJson = (s: McpServer) =>
-    void copyAndDownload(
-      buildMcpServersJson([s]),
-      `${s.name}_mcp.json`,
-      s.name,
-      "servers.toast_exported_one",
-    );
 
   /** 导出全部 enabled server。 */
   const exportToJson = async () => {
@@ -622,7 +644,7 @@ export function Servers() {
       {importModalOpen && (
         <ImportJsonModal
           onClose={() => setImportModalOpen(false)}
-          onImported={load}
+          onImported={handleImported}
         />
       )}
 

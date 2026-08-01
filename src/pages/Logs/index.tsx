@@ -17,7 +17,6 @@ import { Section } from "@/components/Section";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { useLogs } from "./useLogs";
 import { LogTable } from "./LogTable";
-import type { LogEntry } from "@/lib/ipc";
 
 export function Logs() {
   const { t } = useTranslation();

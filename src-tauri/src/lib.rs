@@ -11,6 +11,7 @@ pub mod cmd_doctor;
 pub mod cmd_install;
 pub mod cmd_logs;
 pub mod cmd_market;
+pub mod cmd_memories;
 pub mod cmd_projects;
 pub mod cmd_servers;
 pub mod cmd_settings;
@@ -172,6 +173,14 @@ pub fn run() {
             cmd_skills::remove_skill_target,
             cmd_skills::update_skill_target,
             cmd_skills::import_skill_from_path,
+            cmd_memories::list_memories,
+            cmd_memories::get_memory,
+            cmd_memories::upsert_memory,
+            cmd_memories::delete_memory,
+            cmd_memories::toggle_memory,
+            cmd_memories::sync_memory_to_target,
+            cmd_memories::pull_memory_from_target,
+            cmd_memories::open_memory_target_dir,
             cmd_logs::list_logs,
             cmd_logs::clear_logs,
             cmd_market::fetch_market,

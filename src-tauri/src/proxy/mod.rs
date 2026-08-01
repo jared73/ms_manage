@@ -690,7 +690,13 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     ).await;
     // 检查 response id == 1 —— 老的 MCP server 可能把 id 编为字符串 "1" 而不是数字 1。
     // 用 JSON eq 而非 number 严格比较,兼容两种序列化。
-    let init_ok = matches!(read, Ok(Ok(Some((ref id, _)))) if id == &serde_json::json!(1) || id.as_str() == Some("1"));
+    // 同时校验响应是 result 而非 error（如 initialize 返回错误，直接判定失败）。
+    let init_ok = match read {
+        Ok(Ok(Some((ref id, ref v)))) => {
+            (id == &serde_json::json!(1) || id.as_str() == Some("1")) && v.get("error").is_none()
+        }
+        _ => false,
+    };
     if !init_ok {
         let _ = c.kill().await;
         return Err("initialize 未收到有效响应（可能子进程启动失败或 stdout 输出非 JSON-RPC 内容）".to_string());
@@ -710,9 +716,12 @@ pub async fn fetch_tools(s: &StoredServer) -> Result<Vec<serde_json::Value>, Str
     let _ = c.kill().await;
 
     let tools: Vec<serde_json::Value> = match read2 {
-        Ok(Ok(Some((_id, v)))) => v.get("result").and_then(|r| r.get("tools")).cloned()
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default(),
+        // 校验 id == 2 且响应不是 error —— 之前只看第一条带 id 的帧，
+        // 若 server 在 tools/list 前发别的带 id 响应（如旧的 probe），会误读。
+        Ok(Ok(Some((ref id, v)))) if (id == &serde_json::json!(2) || id.as_str() == Some("2")) && v.get("error").is_none() =>
+            v.get("result").and_then(|r| r.get("tools")).cloned()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default(),
         _ => Vec::new(),
     };
     Ok(tools)
@@ -781,10 +790,16 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
     });
     let _ = stdin.write_all(format!("{}\n", init).as_bytes()).await;
     let _ = stdin.flush().await;
-    let _ = tokio::time::timeout(
+    let init_read = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
     ).await;
+    let init_ok = match &init_read {
+        Ok(Ok(Some((ref id, v)))) => {
+            (id == &serde_json::json!(1) || id.as_str() == Some("1")) && v.get("error").is_none()
+        }
+        _ => false,
+    };
     let list = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
     let _ = stdin.write_all(format!("{}\n", list).as_bytes()).await;
     let _ = stdin.flush().await;
@@ -792,12 +807,22 @@ pub async fn test(s: &StoredServer) -> Result<serde_json::Value, String> {
         std::time::Duration::from_secs(10),
         read_response_line(&mut reader, &mut pending, std::time::Duration::from_secs(10)),
     ).await;
+    // 校验 tools/list 响应 id == 2 且非 error；错配/error 时视为拿不到工具。
     let tools_val: Option<serde_json::Value> = match read {
-        Ok(Ok(Some((_id, v)))) => v.get("result").and_then(|r| r.get("tools")).cloned(),
+        Ok(Ok(Some((ref id, v)))) if (id == &serde_json::json!(2) || id.as_str() == Some("2")) && v.get("error").is_none() =>
+            v.get("result").and_then(|r| r.get("tools")).cloned(),
         _ => None,
     };
     let _ = c.kill().await;
     let ms = started.elapsed().as_millis() as u64;
+    // initialize 失败时测试不应报告 ok:true（否则 UI 显示"测试通过"但工具为空）
+    if !init_ok {
+        return Ok(serde_json::json!({
+            "ok": false,
+            "latency_ms": ms,
+            "error": "initialize 未收到有效响应（子进程可能启动失败）",
+        }));
+    }
     Ok(serde_json::json!({
         "ok": true,
         "latency_ms": ms,
