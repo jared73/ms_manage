@@ -137,6 +137,10 @@ Upload-Asset $releaseId $sig
 Upload-Asset $releaseId $updateJsonPath
 if (Test-Path $zip) { Upload-Asset $releaseId $zip }
 
+# 同步本地便携版目录（dist-portable 是用户常取的绿色版目录）
+Copy-Item (Join-Path $root "src-tauri\target\release\ms_manage.exe") (Join-Path $root "dist-portable\MS Manage.exe") -Force
+Write-Host "portable synced: dist-portable\MS Manage.exe" -ForegroundColor Green
+
 Write-Host ''
 Write-Host "Done: $tag" -ForegroundColor Green
 Write-Host "Update endpoint: $base/$tag/update.json"
