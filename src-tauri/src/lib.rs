@@ -58,6 +58,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state.clone())
         .setup(move |app| {
             // 跟 mcp-router 一样：GUI 起来 = 代理起来，关 GUI = 代理死。

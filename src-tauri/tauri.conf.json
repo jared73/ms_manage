@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MS Manage",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "identifier": "com.msmanage.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -31,6 +31,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,6 +44,19 @@
     "longDescription": "MS Manage — MCP server 和 Skill 的统一管理工具。",
     "category": "DeveloperTool",
     "copyright": "",
-    "homepage": "https://github.com/local/ms-manage"
+    "homepage": "https://github.com/local/ms-manage",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCNjFFMEY0OUQxNEVEQTUKUldTbDdSU2Q5T0JoeTZWWG0reEp6TUxiSkJVM1VtaWNIczdoTFEwRDdFWkZWWDFYMUoxSG4xTDkK",
+      "endpoints": [
+        "http://www.73x.space:9100/Liuqingshan/ms-manage-releases/releases/download/v{{version}}/update.json"
+      ]
+    }
   }
 }

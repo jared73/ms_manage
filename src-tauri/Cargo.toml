@@ -1,6 +1,6 @@
 [package]
 name = "ms_manage"
-version = "1.6.0"
+version = "1.7.0"
 description = "MS Manage — MCP & Skill manager"
 authors = ["MS Manage"]
 edition = "2021"
@@ -22,6 +22,8 @@ tauri-plugin-store = "2"
 tauri-plugin-os = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check } from "lucide-react";
+import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download } from "lucide-react";
 import { toast } from "sonner";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { Section } from "@/components/Section";
 import { Modal } from "@/components/Modal";
 import { Toggle } from "@/components/Toggle";
@@ -69,6 +71,54 @@ export function Settings() {
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [doctor, setDoctor] = useState<DoctorItem[] | null>(null);
   const [doctorRunning, setDoctorRunning] = useState(false);
+  // 自动更新:检查中 / 有新版本 / 下载进度
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+
+  const handleCheckUpdate = async () => {
+    if (updateBusy) return;
+    setUpdateBusy(true);
+    setUpdateProgress(null);
+    try {
+      const update = await check();
+      if (!update) {
+        toast.success(t("settings.update_none") as string);
+        return;
+      }
+      setUpdateAvailable(update);
+    } catch (e) {
+      toast.error(t("settings.update_check_failed", { msg: describeError(e) }) as string);
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    const update = updateAvailable;
+    if (!update || updateInstalling) return;
+    setUpdateInstalling(true);
+    setUpdateProgress(0);
+    try {
+      let downloaded = 0;
+      let total: number | undefined;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (total) setUpdateProgress(Math.min(100, Math.round((downloaded / total) * 100)));
+        }
+      });
+      toast.success(t("settings.update_restarting") as string);
+      setUpdateAvailable(null);
+      await relaunch();
+    } catch (e) {
+      setUpdateInstalling(false);
+      toast.error(t("settings.update_download_failed", { msg: describeError(e) }) as string);
+    }
+  };
 
   const runDoctor = async () => {
     setDoctorRunning(true);
@@ -339,7 +389,20 @@ export function Settings() {
         {/* About */}
         <div className="card space-y-3">
           <h3 className="font-semibold">{t("settings.about")}</h3>
-          <Row label={t("settings.version")}>{info?.version ?? "—"}</Row>
+          <Row label={t("settings.version")}>
+            <div className="flex items-center gap-2">
+              <span>{info?.version ?? "—"}</span>
+              <button
+                className="btn-ghost px-2 py-0.5 text-xs"
+                onClick={handleCheckUpdate}
+                disabled={updateBusy}
+                title={t("settings.update_check_tooltip") as string}
+              >
+                {updateBusy ? <Loader2 className="icon-xs animate-spin"/> : <RefreshCw className="icon-xs"/>}
+                {updateBusy ? t("settings.update_checking") : t("settings.update_check")}
+              </button>
+            </div>
+          </Row>
           <Row label={t("settings.data_dir")}>
             <div className="flex items-center gap-2">
               <code className="text-xs text-fg-muted">{info?.data_dir ?? "—"}</code>
@@ -371,6 +434,56 @@ export function Settings() {
           </Row>
         </div>
       </Section>
+
+      {/* 发现新版本弹窗 */}
+      {updateAvailable && (
+        <Modal
+          open
+          size="sm"
+          title={t("settings.update_available_title")}
+          onClose={() => { if (!updateInstalling) setUpdateAvailable(null); }}
+          footer={
+            <>
+              <button
+                className="btn-ghost"
+                onClick={() => setUpdateAvailable(null)}
+                disabled={updateInstalling}
+              >
+                {t("settings.update_later")}
+              </button>
+              <button className="btn-primary" onClick={handleDownload} disabled={updateInstalling}>
+                {updateInstalling && updateProgress !== null ? (
+                  <>
+                    <Loader2 className="icon-sm animate-spin"/>
+                    {t("settings.update_downloading", { percent: updateProgress })}
+                  </>
+                ) : (
+                  <>
+                    <Download className="icon-sm"/>
+                    {t("settings.update_now")}
+                  </>
+                )}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-2 text-sm">
+            <p>
+              {t("settings.update_available_desc", { version: updateAvailable.version })}
+            </p>
+            {updateAvailable.body && (
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg-subtle p-2 text-xs text-fg-muted">
+                {updateAvailable.body}
+              </pre>
+            )}
+            {updateInstalling && updateProgress === null && (
+              <p className="flex items-center gap-1.5 text-fg-muted">
+                <Loader2 className="icon-sm animate-spin"/>{t("settings.update_preparing")}
+              </p>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {/* 重新生成 Token 双确认弹窗 */}
       {confirmRegen && (

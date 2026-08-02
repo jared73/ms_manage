@@ -1,7 +1,7 @@
 {
   "name": "ms_manage",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "type": "module",
   "description": "MS Manage — MCP server 与 skill 统一管理工具",
   "scripts": {
@@ -28,8 +28,10 @@
     "@tauri-apps/plugin-dialog": "^2.0.1",
     "@tauri-apps/plugin-fs": "^2.0.2",
     "@tauri-apps/plugin-http": "^2.0.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.1",
     "@tauri-apps/plugin-store": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.2.7",
     "i18next": "^24.0.5",
