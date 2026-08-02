@@ -19,6 +19,7 @@
     "http:default",
     "store:default",
     "os:default",
-    "opener:default"
+    "opener:default",
+    "updater:default"
   ]
 }
