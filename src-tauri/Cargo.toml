@@ -1,6 +1,6 @@
 [package]
 name = "ms_manage"
-version = "1.5.0"
+version = "1.6.0"
 description = "MS Manage — MCP & Skill manager"
 authors = ["MS Manage"]
 edition = "2021"
