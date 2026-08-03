@@ -138,12 +138,12 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                 turn.output,
                 turn.cached,
                 0,
-            &costs,
-            &total,
-            Some(&session_id),
-            event.created_at,
-            crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-        )?;
+                &costs,
+                &total,
+                Some(&session_id),
+                event.created_at,
+                crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
+            )?;
             if inserted {
                 result.imported += 1;
             } else {
