@@ -290,3 +290,76 @@ export interface DoctorItem {
   suggestion?: string;
 }
 export const doctorCheck = () => invoke<DoctorItem[]>("doctor_check");
+
+// ---- Usage stats ----
+export interface UsageSummary {
+  requestCount: number;
+  totalCost: string;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+}
+
+export interface UsageSummaryByApp {
+  appType: string;
+  requestCount: number;
+  totalCost: string;
+  totalTokens: number;
+}
+
+export interface DailyStats {
+  date: string;
+  requestCount: number;
+  totalCost: string;
+  totalTokens: number;
+}
+
+export interface ModelStats {
+  model: string;
+  requestCount: number;
+  totalTokens: number;
+  totalCost: string;
+}
+
+export interface DataSourceStatus {
+  appType: string;
+  label: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface SessionSyncResult {
+  imported: number;
+  skipped: number;
+  filesScanned: number;
+  suspectedDuplicates: number;
+  deferredFiles: number;
+  errors: string[];
+}
+
+export interface ModelPricingInput {
+  modelId: string;
+  displayName?: string;
+  inputCostPerMillion: string;
+  outputCostPerMillion: string;
+  cacheReadCostPerMillion: string;
+  cacheCreationCostPerMillion: string;
+}
+
+export const getUsageSummary = (
+  startDate?: number,
+  endDate?: number,
+  appType?: string,
+) => invoke<UsageSummary>("get_usage_summary", { startDate, endDate, appType });
+export const getUsageSummaryByApp = (startDate?: number, endDate?: number) =>
+  invoke<UsageSummaryByApp[]>("get_usage_summary_by_app", { startDate, endDate });
+export const getUsageTrends = (startDate?: number, endDate?: number) =>
+  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate });
+export const getModelStats = (startDate?: number, endDate?: number) =>
+  invoke<ModelStats[]>("get_model_stats", { startDate, endDate });
+export const getUsageDataSources = () => invoke<DataSourceStatus[]>("get_usage_data_sources");
+export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_usage");
+export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");
+export const updateModelPricingBatch = (items: ModelPricingInput[]) =>
+  invoke<void>("update_model_pricing_batch", { items });
