@@ -1,6 +1,5 @@
 pub mod db;
-// TODO(usage): created in later task
-// pub mod paths;
+pub mod paths;
 // TODO(usage): created in later task
 // pub mod pricing;
 // TODO(usage): created in later task
