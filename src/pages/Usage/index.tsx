@@ -9,6 +9,7 @@ import { UsageTrendChart } from "./UsageTrendChart";
 import { ModelStatsTable } from "./ModelStatsTable";
 import { RequestLogTable } from "./RequestLogTable";
 import { DataSourcesPanel } from "./DataSourcesPanel";
+import { PricingPanel } from "./PricingPanel";
 
 const RANGES = [
   { key: "7d", days: 7 },
@@ -113,6 +114,10 @@ export function Usage() {
 
       <Section title={t("usage.request_logs")}>
         <RequestLogTable startDate={startDate} />
+      </Section>
+
+      <Section title={t("usage.model_pricing")}>
+        <PricingPanel />
       </Section>
     </div>
   );
