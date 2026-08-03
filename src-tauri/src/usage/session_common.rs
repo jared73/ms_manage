@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use std::time::SystemTime;
 
 /// 一次同步的结果汇总
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SessionSyncResult {
     pub imported: u32,
     pub skipped: u32,

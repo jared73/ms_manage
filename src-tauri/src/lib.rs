@@ -16,6 +16,7 @@ pub mod cmd_projects;
 pub mod cmd_servers;
 pub mod cmd_settings;
 pub mod cmd_skills;
+pub mod cmd_usage;
 pub mod diagnose;
 pub mod install;
 pub(crate) mod process_util;
@@ -200,6 +201,14 @@ pub fn run() {
             cmd_settings::set_auto_launch,
             proxy_endpoint::get_proxy_status,
             proxy_endpoint::get_router_config,
+            cmd_usage::get_usage_summary,
+            cmd_usage::get_usage_summary_by_app,
+            cmd_usage::get_usage_trends,
+            cmd_usage::get_model_stats,
+            cmd_usage::get_usage_data_sources,
+            cmd_usage::sync_session_usage,
+            cmd_usage::get_model_pricing,
+            cmd_usage::update_model_pricing_batch,
             proxy_endpoint::start_proxy,
             proxy_endpoint::stop_proxy,
             proxy_endpoint::get_tools_total,

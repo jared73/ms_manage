@@ -24,6 +24,8 @@ pub struct AppState {
     /// 鉴权 check 在比较 generation 时使用旧 token 做 ct_eq,造成短时间误判。
     /// 把两者绑在一起写/读,锁内一次性 clone `(token, generation)`,消除这个 race。
     pub cached_token: Mutex<(String, u64)>,
+    /// 使用统计 SQLite 数据库句柄
+    pub usage_db: Arc<crate::usage::UsageDb>,
 }
 
 impl AppState {
@@ -36,10 +38,12 @@ impl AppState {
         std::fs::create_dir_all(&log_dir)?;
         let storage = Arc::new(Storage::new(data_dir.clone())?);
         let initial_token = storage.load_settings()?.mcp_token.unwrap_or_default();
+        let usage_db = crate::usage::UsageDb::open(&data_dir.join("usage.db"))?;
         Ok(Self {
             storage, data_dir, log_dir,
             proxy_starting: Arc::new(AtomicBool::new(false)),
             cached_token: Mutex::new((initial_token, 0)),
+            usage_db,
         })
     }
 
