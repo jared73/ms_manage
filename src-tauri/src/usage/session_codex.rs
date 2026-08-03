@@ -174,6 +174,7 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
             &total,
             Some(&session_id),
             created_at,
+            crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
         )?;
         if inserted {
             imported += 1;

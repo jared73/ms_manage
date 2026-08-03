@@ -256,9 +256,10 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
         "INSERT OR IGNORE INTO request_logs (
             request_id, provider_id, app_type, model, request_model,
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_token_semantics,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, status_code, session_id, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         rusqlite::params![
             request_id,
             "_claude_session",
@@ -269,6 +270,7 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
             msg.output_tokens,
             msg.cache_read_tokens,
             msg.cache_creation_tokens,
+            crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_FRESH,
             costs.input_cost.to_string(),
             costs.output_cost.to_string(),
             costs.cache_read_cost.to_string(),

@@ -7,6 +7,7 @@ pub mod session_codex;
 pub mod session_gemini;
 pub mod session_grokbuild;
 pub mod session_opencode;
+pub mod sql_helpers;
 pub mod stats;
 
 use anyhow::{Context, Result};
