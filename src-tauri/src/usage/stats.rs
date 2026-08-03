@@ -366,7 +366,7 @@ pub fn get_request_logs(
         )
         .unwrap_or(0) as u64;
 
-    let offset = (page - 1) * page_size;
+    let offset = (page.saturating_sub(1)).saturating_mul(page_size);
     let mut stmt = conn
         .prepare(&format!(
             "SELECT request_id, app_type, model, input_tokens, output_tokens,

@@ -15,10 +15,14 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
   const load = useCallback(async () => {
     const reqId = ++requestSeqRef.current;
     try {
-      const d = await getRequestLogs({ startDate, page, pageSize });
-      // 丢弃过期响应（快速切换 range 时旧请求可能晚返回）
+      const result = await getRequestLogs({ startDate, page, pageSize });
       if (reqId !== requestSeqRef.current) return;
-      setData(d);
+      setData(result);
+      // 新数据返回后 clamp 页码，避免超出实际页数
+      const totalPages = Math.max(1, Math.ceil(result.total / pageSize));
+      if (page > totalPages) {
+        setPage(totalPages);
+      }
     } catch (e) {
       if (reqId !== requestSeqRef.current) return;
       toast.error(describeError(e));
@@ -28,6 +32,10 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [startDate]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / pageSize)) : 1;
 
