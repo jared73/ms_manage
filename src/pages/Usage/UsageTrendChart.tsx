@@ -83,7 +83,7 @@ export function UsageTrendChart({
                 fontSize: 12,
               }}
               labelStyle={{ color: "rgb(var(--fg-muted))" }}
-              labelFormatter={(label) => (typeof label === "string" ? label.slice(-6) : label)}
+              labelFormatter={(label) => (isHourly && typeof label === "string" ? label.slice(-6) : label)}
             />
             <Line yAxisId="left" type="monotone" dataKey="input" stroke={TOKEN_COLORS.input} name={t("usage.input_tokens_short")} dot={dot} />
             <Line yAxisId="left" type="monotone" dataKey="output" stroke={TOKEN_COLORS.output} name={t("usage.output_tokens_short")} dot={dot} />
