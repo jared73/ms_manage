@@ -144,7 +144,7 @@ pub fn get_usage_summary_by_app(
     let mut stmt = conn
         .prepare(&format!(
             "SELECT app_type, COUNT(*), COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0),
-                    COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+                    COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0)
              FROM request_logs {where_clause}
              GROUP BY app_type ORDER BY app_type"
         ))
@@ -200,7 +200,7 @@ pub fn get_usage_trends(
         .prepare(&format!(
             "SELECT date(created_at, 'unixepoch', 'localtime') as day,
                     COUNT(*), COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0),
-                    COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0)
+                    COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0)
              FROM request_logs {where_clause}
              GROUP BY day ORDER BY day"
         ))
@@ -255,7 +255,7 @@ pub fn get_model_stats(
     let mut stmt = conn
         .prepare(&format!(
             "SELECT model, COUNT(*),
-                    COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens), 0),
+                    COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0),
                     COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0)
              FROM request_logs {where_clause}
              GROUP BY model ORDER BY SUM(CAST(total_cost_usd AS REAL)) DESC"
