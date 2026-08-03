@@ -7,6 +7,7 @@ import { Section } from "@/components/Section";
 import { UsageHero } from "./UsageHero";
 import { UsageTrendChart } from "./UsageTrendChart";
 import { ModelStatsTable } from "./ModelStatsTable";
+import { RequestLogTable } from "./RequestLogTable";
 import { DataSourcesPanel } from "./DataSourcesPanel";
 
 const RANGES = [
@@ -109,6 +110,10 @@ export function Usage() {
           <ModelStatsTable data={models} />
         </Section>
       )}
+
+      <Section title={t("usage.request_logs")}>
+        <RequestLogTable startDate={startDate} />
+      </Section>
     </div>
   );
 }

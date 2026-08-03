@@ -153,3 +153,42 @@ pub fn update_model_pricing_batch(
     }
     Ok(())
 }
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestLogFilters {
+    pub start_date: Option<i64>,
+    pub end_date: Option<i64>,
+    pub app_type: Option<String>,
+    pub model: Option<String>,
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedLogs {
+    pub rows: Vec<crate::usage::stats::RequestLogRow>,
+    pub total: u64,
+    pub page: u64,
+    pub page_size: u64,
+}
+
+#[tauri::command]
+pub fn get_request_logs(
+    state: State<'_, Arc<AppState>>,
+    filters: RequestLogFilters,
+) -> Result<PaginatedLogs, String> {
+    let db = state.usage_db.clone();
+    let p = crate::usage::stats::get_request_logs(
+        &db,
+        filters.start_date,
+        filters.end_date,
+        filters.app_type.as_deref(),
+        filters.model.as_deref(),
+        filters.page.unwrap_or(1).max(1),
+        filters.page_size.unwrap_or(50).min(500),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(PaginatedLogs { rows: p.rows, total: p.total, page: p.page, page_size: p.page_size })
+}

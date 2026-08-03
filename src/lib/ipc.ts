@@ -363,3 +363,35 @@ export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_us
 export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");
 export const updateModelPricingBatch = (items: ModelPricingInput[]) =>
   invoke<void>("update_model_pricing_batch", { items });
+
+export interface RequestLogRow {
+  requestId: string;
+  appType: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalCostUsd: string;
+  createdAt: number;
+  sessionId?: string;
+}
+
+export interface PaginatedLogs {
+  rows: RequestLogRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface RequestLogFilters {
+  startDate?: number;
+  endDate?: number;
+  appType?: string;
+  model?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export const getRequestLogs = (filters: RequestLogFilters = {}) =>
+  invoke<PaginatedLogs>("get_request_logs", { filters });

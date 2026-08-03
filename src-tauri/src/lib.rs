@@ -242,6 +242,7 @@ pub fn run() {
             cmd_usage::sync_session_usage,
             cmd_usage::get_model_pricing,
             cmd_usage::update_model_pricing_batch,
+            cmd_usage::get_request_logs,
             proxy_endpoint::start_proxy,
             proxy_endpoint::stop_proxy,
             proxy_endpoint::get_tools_total,

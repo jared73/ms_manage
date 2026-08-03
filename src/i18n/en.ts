@@ -511,6 +511,13 @@ export default {
     sync_now: "Sync Now",
     sync_done: "Synced: {{imported}} imported, {{skipped}} skipped",
     range: { "7d": "7 days", "30d": "30 days", "90d": "90 days", all: "All" },
+    request_logs: "Request Logs",
+    time: "Time",
+    app: "App",
+    input_tokens: "Input Tokens",
+    output_tokens: "Output Tokens",
+    prev: "Previous",
+    next: "Next",
   },
   status: { starting: "Starting", running: "Running", stopped: "Stopped", error: "Error", disabled: "Disabled" },
   projects: {
