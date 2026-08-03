@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getModelStats, getProviderStats, getUsageSummary, getUsageTrends,
   type DailyStats, type ModelStats, type ProviderStats, type UsageSummary } from "@/lib/ipc";
@@ -48,6 +49,7 @@ export function Usage() {
   const [models, setModels] = useState<ModelStats[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState(0);
+  const [pricingOpen, setPricingOpen] = useState(false);
 
   const startDate = useMemo(() => rangeToEpoch((RANGES.find((r) => r.key === rangeKey) ?? RANGES[0]).days), [rangeKey]);
   const grouping = rangeKey === "today" ? "hour" : "day";
@@ -154,9 +156,21 @@ export function Usage() {
         {tab === "models" && <ModelStatsTable data={models} />}
       </Section>
 
-      <Section title={t("usage.model_pricing")}>
-        <PricingPanel />
-      </Section>
+      <div className="rounded-xl border border-border bg-bg-subtle">
+        <button
+          onClick={() => setPricingOpen((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-3"
+          aria-expanded={pricingOpen}
+        >
+          <span className="text-sm font-semibold">{t("usage.model_pricing")}</span>
+          <ChevronDown size={16} className={`text-fg-muted transition-transform ${pricingOpen ? "rotate-180" : ""}`} />
+        </button>
+        {pricingOpen && (
+          <div className="border-t border-border p-4">
+            <PricingPanel />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -91,6 +91,9 @@ pub fn init_schema(db: &crate::usage::UsageDb) -> Result<()> {
         )
         .context("迁移 request_logs 增加 input_token_semantics 列失败")?;
     }
+
+    // 启动时批量写入内置默认定价（幂等）
+    crate::usage::pricing::seed_default_pricing(&conn)?;
     Ok(())
 }
 

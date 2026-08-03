@@ -139,33 +139,58 @@ pub fn find_model_pricing(
     }
 }
 
+/// 内置默认定价表：每一项 (model_prefix, input, output, cache_read, cache_creation)。
+/// 顺序即匹配优先级，窄前缀必须排在宽前缀之前（如 gpt-4o-mini 在 gpt-4o 之前）。
+pub fn default_pricing_map(
+) -> Vec<(&'static str, &'static str, &'static str, &'static str, &'static str)> {
+    vec![
+        ("claude-3-5-sonnet", "3.0", "15.0", "0.3", "3.75"),
+        ("claude-sonnet-4", "3.0", "15.0", "0.3", "3.75"),
+        ("claude-3-7-sonnet", "3.0", "15.0", "0.3", "3.75"),
+        ("claude-3-5-haiku", "0.80", "4.0", "0.08", "1.0"),
+        ("claude-3-opus", "15.0", "75.0", "1.5", "18.75"),
+        ("gpt-4o-mini", "0.15", "0.60", "0.075", "0.15"),
+        ("gpt-4o", "2.50", "10.0", "1.25", "2.50"),
+        ("gpt-4.1-mini", "0.40", "1.60", "0.10", "0.40"),
+        ("gpt-4.1-nano", "0.10", "0.40", "0.025", "0.10"),
+        ("gpt-4.1", "2.0", "8.0", "0.5", "2.0"),
+        ("o3-mini", "1.10", "4.40", "0.55", "1.10"),
+        ("o4-mini", "1.10", "4.40", "0.55", "1.10"),
+        ("o3", "2.0", "8.0", "0.5", "2.0"),
+        ("o4", "2.0", "8.0", "0.5", "2.0"),
+        ("gemini-2.5-pro", "1.25", "10.0", "0.3125", "1.25"),
+        ("gemini-2.5-flash", "0.30", "2.50", "0.075", "0.30"),
+        ("deepseek-reasoner", "0.55", "2.19", "0.14", "0.55"),
+        ("deepseek", "0.27", "1.10", "0.07", "0.27"),
+        ("grok-4.5-build", "2.0", "6.0", "0.30", "2.0"),
+        ("grok", "2.0", "6.0", "0.30", "2.0"),
+        ("qwen", "0.50", "2.0", "0.10", "0.50"),
+    ]
+}
+
 /// 内置定价 seed：model_id -> (input, output, cache_read, cache_creation, ModelPricing)
-fn seed_pricing(model_id: &str) -> Option<(&'static str, &'static str, &'static str, &'static str, ModelPricing)> {
-    let entry: Option<(&str, &str, &str, &str)> = match model_id {
-        m if m.starts_with("claude-3-5-sonnet") => Some(("3.0", "15.0", "0.3", "3.75")),
-        m if m.starts_with("claude-sonnet-4") => Some(("3.0", "15.0", "0.3", "3.75")),
-        m if m.starts_with("claude-3-7-sonnet") => Some(("3.0", "15.0", "0.3", "3.75")),
-        m if m.starts_with("claude-3-5-haiku") => Some(("0.80", "4.0", "0.08", "1.0")),
-        m if m.starts_with("claude-3-opus") => Some(("15.0", "75.0", "1.5", "18.75")),
-        m if m.starts_with("gpt-4o-mini") => Some(("0.15", "0.60", "0.075", "0.15")),
-        m if m.starts_with("gpt-4o") => Some(("2.50", "10.0", "1.25", "2.50")),
-        m if m.starts_with("gpt-4.1-mini") => Some(("0.40", "1.60", "0.10", "0.40")),
-        m if m.starts_with("gpt-4.1-nano") => Some(("0.10", "0.40", "0.025", "0.10")),
-        m if m.starts_with("gpt-4.1") => Some(("2.0", "8.0", "0.5", "2.0")),
-        m if m.starts_with("o3-mini") || m.starts_with("o4-mini") => Some(("1.10", "4.40", "0.55", "1.10")),
-        m if m.starts_with("o3") || m.starts_with("o4") => Some(("2.0", "8.0", "0.5", "2.0")),
-        m if m.starts_with("gemini-2.5-pro") => Some(("1.25", "10.0", "0.3125", "1.25")),
-        m if m.starts_with("gemini-2.5-flash") => Some(("0.30", "2.50", "0.075", "0.30")),
-        m if m.starts_with("deepseek") && m.contains("reasoner") => Some(("0.55", "2.19", "0.14", "0.55")),
-        m if m.starts_with("deepseek") => Some(("0.27", "1.10", "0.07", "0.27")),
-        m if m.starts_with("grok-4.5-build") => Some(("2.0", "6.0", "0.30", "2.0")),
-        m if m.starts_with("grok") => Some(("2.0", "6.0", "0.30", "2.0")),
-        m if m.starts_with("qwen") => Some(("0.50", "2.0", "0.10", "0.50")),
-        _ => None,
-    };
-    let entry = entry?;
-    let p = ModelPricing::from_strings(entry.0, entry.1, entry.2, entry.3).ok()?;
-    Some((entry.0, entry.1, entry.2, entry.3, p))
+fn seed_pricing(
+    model_id: &str,
+) -> Option<(&'static str, &'static str, &'static str, &'static str, ModelPricing)> {
+    let (_, input, output, cache_read, cache_creation) = default_pricing_map()
+        .into_iter()
+        .find(|(prefix, _, _, _, _)| model_id.starts_with(prefix))?;
+    let p = ModelPricing::from_strings(input, output, cache_read, cache_creation).ok()?;
+    Some((input, output, cache_read, cache_creation, p))
+}
+
+/// 批量写入所有内置默认定价（启动时调用，幂等）
+pub fn seed_default_pricing(conn: &rusqlite::Connection) -> Result<()> {
+    for (prefix, input, output, cache_read, cache_creation) in default_pricing_map() {
+        conn.execute(
+            "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
+                input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million)
+             VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![prefix, input, output, cache_read, cache_creation],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -232,5 +257,37 @@ mod tests {
         assert_eq!(seed_pricing("gpt-4o").unwrap().0, "2.50");
         assert_eq!(seed_pricing("o4-mini").unwrap().0, "1.10");
         assert_eq!(seed_pricing("grok-4.5-build").unwrap().0, "2.0");
+    }
+
+    #[test]
+    fn test_default_pricing_map_nonempty() {
+        let map = default_pricing_map();
+        assert!(!map.is_empty());
+        let prefixes: Vec<&str> = map.iter().map(|(p, _, _, _, _)| *p).collect();
+        assert!(prefixes.contains(&"claude-sonnet-4"));
+        assert!(prefixes.contains(&"gpt-4o"));
+        assert!(prefixes.contains(&"deepseek-reasoner"));
+    }
+
+    #[test]
+    fn test_seed_default_pricing_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_pricing (
+                model_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                input_cost_per_million TEXT NOT NULL,
+                output_cost_per_million TEXT NOT NULL,
+                cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+                cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+            );",
+        )
+        .unwrap();
+        seed_default_pricing(&conn).unwrap();
+        seed_default_pricing(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM model_pricing", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, default_pricing_map().len() as i64);
     }
 }
