@@ -243,9 +243,9 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
         cache_creation_tokens: msg.cache_creation_tokens,
         model: Some(msg.model.clone()),
     };
+    let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "claude");
     let (costs, total) = match find_model_pricing(&conn, &msg.model) {
         Some(pricing) => {
-            let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "claude");
             let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("claude"), multiplier);
             let t = c.total_cost.to_string();
             (c, t)
@@ -281,7 +281,7 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
             200i64,
             msg.session_id.as_deref(),
             1i64,
-            "1.0",
+            multiplier.to_string(),
             created_at,
             "session",
         ],

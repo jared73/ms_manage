@@ -191,6 +191,35 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_cache_inclusive() {
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 200,
+            cache_creation_tokens: 100,
+            model: None,
+        };
+        let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
+        let c = calculate_cost(&usage, &pricing, true, Decimal::from(1));
+        assert_eq!(c.input_cost, Decimal::from_str("0.0021").unwrap());
+    }
+
+    #[test]
+    fn test_calculate_with_multiplier() {
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 200,
+            cache_creation_tokens: 100,
+            model: None,
+        };
+        let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
+        let c = calculate_cost(&usage, &pricing, false, Decimal::from_str("2.0").unwrap());
+        // 无倍率 total = 0.010935；×2 = 0.02187
+        assert_eq!(c.total_cost, Decimal::from_str("0.02187").unwrap());
+    }
+
+    #[test]
     fn test_seed_lookup() {
         assert!(seed_pricing("claude-sonnet-4-20250514").is_some());
         assert!(seed_pricing("grok-4.5-build").is_some());

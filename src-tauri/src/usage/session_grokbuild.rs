@@ -142,6 +142,7 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                 0,
                 &costs,
                 &total,
+                &multiplier.to_string(),
                 Some(&session_id),
                 event.created_at,
                 crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,

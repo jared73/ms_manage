@@ -224,6 +224,7 @@ fn insert_opencode_message(
     let output_with_reasoning = msg.output_tokens + msg.reasoning_tokens;
     let app_type = "opencode";
     let model_id = &msg.model_id;
+    let multiplier = crate::usage::pricing::get_app_multiplier(&conn, app_type);
 
     // 优先用 opencode 自带的 cost，否则定价表估算
     let (costs, total_cost) = if msg.cost > 0.0 {
@@ -250,7 +251,6 @@ fn insert_opencode_message(
         };
         match find_model_pricing(&conn, model_id) {
             Some(pricing) => {
-                let multiplier = crate::usage::pricing::get_app_multiplier(&conn, app_type);
                 let c = crate::usage::pricing::calculate_cost(
                     &usage,
                     &pricing,
@@ -295,7 +295,7 @@ fn insert_opencode_message(
             200i64,
             Some(request_id),
             1i64,
-            "1.0",
+            multiplier.to_string(),
             created_at,
             "session",
         ],

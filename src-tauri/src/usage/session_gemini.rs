@@ -106,9 +106,9 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
             model: Some(data.model.clone()),
         };
         let conn = db.conn.lock();
+        let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "gemini");
         let (costs, total) = match find_model_pricing(&conn, &data.model) {
             Some(pricing) => {
-                let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "gemini");
                 let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("gemini"), multiplier);
                 let t = c.total_cost.to_string();
                 (c, t)
@@ -128,6 +128,7 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
             0,
             &costs,
             &total,
+            &multiplier.to_string(),
             session_id.as_deref(),
             created_at,
             crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
