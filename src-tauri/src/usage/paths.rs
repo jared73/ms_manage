@@ -1,7 +1,7 @@
 use dirs::home_dir;
 use std::path::PathBuf;
 
-/// 各工具数据目录探测。后续 Task 15 会加覆盖配置。
+/// 各工具数据目录探测。
 pub struct UsagePaths {
     pub opencode_db: PathBuf,
     pub claude_projects: PathBuf,
@@ -34,5 +34,25 @@ impl UsagePaths {
             gemini_dir: home.join(".gemini"),
             grok_dir: home.join(".grok"),
         }
+    }
+
+    /// 应用覆盖配置后的路径（未配置的保持默认探测结果）
+    pub fn apply_overrides(mut self, overrides: &std::collections::HashMap<String, String>) -> Self {
+        if let Some(p) = overrides.get("opencode") {
+            if !p.is_empty() { self.opencode_db = std::path::PathBuf::from(p); }
+        }
+        if let Some(p) = overrides.get("claude") {
+            if !p.is_empty() { self.claude_projects = std::path::PathBuf::from(p); }
+        }
+        if let Some(p) = overrides.get("codex") {
+            if !p.is_empty() { self.codex_sessions = std::path::PathBuf::from(p); }
+        }
+        if let Some(p) = overrides.get("gemini") {
+            if !p.is_empty() { self.gemini_dir = std::path::PathBuf::from(p); }
+        }
+        if let Some(p) = overrides.get("grokbuild") {
+            if !p.is_empty() { self.grok_dir = std::path::PathBuf::from(p); }
+        }
+        self
     }
 }

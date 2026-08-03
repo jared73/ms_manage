@@ -203,6 +203,9 @@ pub struct StoredSettings {
     /// 技能同步目标（每个编辑器一个），含 builtin 预设 + 用户自加
     #[serde(default)]
     pub skill_targets: Vec<SkillTarget>,
+    /// 使用统计各数据源目录覆盖。key: opencode/claude/codex/gemini/grokbuild，value: 覆盖路径
+    #[serde(default)]
+    pub usage_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +309,7 @@ impl Default for StoredSettings {
             mcp_token: Some(generate_token()),
             github_token: None,
             skill_targets: default_skill_targets(),
+            usage_overrides: HashMap::new(),
         }
     }
 }

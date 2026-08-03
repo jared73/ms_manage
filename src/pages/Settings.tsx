@@ -12,6 +12,15 @@ import type { AppSettings, DoctorItem } from "@/lib/ipc";
 import { useApp, previewTheme, readPersistedUi, type ThemeName } from "@/stores/app";
 import { describeError } from "@/lib/errors";
 
+/** 使用统计支持的数据源目录覆盖项（key 对应后端 UsagePaths.apply_overrides） */
+const USAGE_SOURCE_TOOLS = [
+  { key: "opencode", label: "OpenCode" },
+  { key: "claude", label: "Claude Code" },
+  { key: "codex", label: "Codex" },
+  { key: "gemini", label: "Gemini" },
+  { key: "grokbuild", label: "Grok Build" },
+] as const;
+
 /**
  * 读取某主题的 --accent / --bg CSS 变量并转成可直接给 style.background 用的 rgb() 字符串。
  *
@@ -290,6 +299,54 @@ export function Settings() {
               {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"registry.npmmirror.com"}</code>
             </span>
           </Row>
+        </div>
+
+        {/* 使用统计数据源目录覆盖 */}
+        <div className="card space-y-3">
+          <div>
+            <h3 className="font-semibold">{t("settings.usage_overrides")}</h3>
+            <div className="text-xs text-fg-muted">{t("settings.usage_overrides_desc")}</div>
+          </div>
+          {USAGE_SOURCE_TOOLS.map(({ key, label }) => (
+            <Row key={key} label={label}>
+              <div className="flex items-center gap-2">
+                <input
+                  className="input font-mono"
+                  placeholder={t("settings.usage_override_placeholder") as string}
+                  value={settings.usage_overrides?.[key] ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setSettings({
+                      ...settings,
+                      usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: value },
+                    });
+                  }}
+                  onBlur={() => {
+                    updateSettings(settings).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  spellCheck={false}
+                />
+                {(settings.usage_overrides?.[key] ?? "") !== "" && (
+                  <button
+                    className="btn-ghost shrink-0 text-xs"
+                    onClick={() => {
+                      const next = {
+                        ...settings,
+                        usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: "" },
+                      };
+                      setSettings(next);
+                      updateSettings(next).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
+                    }}
+                  >
+                    {t("settings.usage_override_reset")}
+                  </button>
+                )}
+              </div>
+            </Row>
+          ))}
         </div>
 
         {/* 主题选择 */}

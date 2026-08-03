@@ -91,12 +91,18 @@ pub fn run() {
             // usage 统计后台同步：启动立即跑一次，之后每 60 秒增量检查
             {
                 let db = state.usage_db.clone();
+                let storage = state.storage.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
                         let db = db.clone();
+                        let storage = storage.clone();
                         let result = tauri::async_runtime::spawn_blocking(move || {
                             let _guard = crate::usage::sync_mutex().lock();
-                            let paths = crate::usage::paths::UsagePaths::detect();
+                            let overrides = storage
+                                .load_settings()
+                                .map(|s| s.usage_overrides)
+                                .unwrap_or_default();
+                            let paths = crate::usage::paths::UsagePaths::detect().apply_overrides(&overrides);
                             crate::usage::sync_all(&db, &paths)
                         })
                         .await;

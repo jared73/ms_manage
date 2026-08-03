@@ -46,17 +46,29 @@ pub fn get_model_stats(
 }
 
 #[tauri::command]
-pub fn get_usage_data_sources() -> Vec<crate::usage::stats::DataSourceStatus> {
-    crate::usage::stats::get_usage_data_sources()
+pub fn get_usage_data_sources(
+    state: State<'_, Arc<AppState>>,
+) -> Vec<crate::usage::stats::DataSourceStatus> {
+    let overrides = state
+        .storage
+        .load_settings()
+        .map(|s| s.usage_overrides)
+        .unwrap_or_default();
+    crate::usage::stats::get_usage_data_sources(&overrides)
 }
 
 /// 立即手动同步所有数据源
 #[tauri::command]
 pub async fn sync_session_usage(state: State<'_, Arc<AppState>>) -> Result<SessionSyncResult, String> {
     let db = state.usage_db.clone();
+    let overrides = state
+        .storage
+        .load_settings()
+        .map(|s| s.usage_overrides)
+        .unwrap_or_default();
     let result = tokio::task::spawn_blocking(move || {
         let _guard = crate::usage::sync_mutex().lock();
-        let paths = crate::usage::paths::UsagePaths::detect();
+        let paths = crate::usage::paths::UsagePaths::detect().apply_overrides(&overrides);
         crate::usage::sync_all(&db, &paths)
     })
     .await

@@ -121,6 +121,8 @@ export interface AppSettings {
   mcp_token_present?: boolean;
   /** github_token 也是掩码版。 */
   github_token?: string;
+  /** 使用统计各数据源目录覆盖（key: opencode/claude/codex/gemini/grokbuild）。 */
+  usage_overrides?: Record<string, string>;
 }
 
 // ---- MCP Server ----

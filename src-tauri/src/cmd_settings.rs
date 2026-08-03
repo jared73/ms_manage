@@ -37,6 +37,8 @@ pub struct AppSettings {
     pub github_token: Option<String>,
     #[serde(default)]
     pub skill_targets: Vec<crate::storage::SkillTarget>,
+    #[serde(default)]
+    pub usage_overrides: std::collections::HashMap<String, String>,
 }
 
 /// 前端 round-trip 回来的形态。不接受 token 字段——
@@ -59,6 +61,8 @@ pub struct SafeAppSettings {
     pub auto_inject_npm_registry: bool,
     #[serde(default)]
     pub skill_targets: Vec<crate::storage::SkillTarget>,
+    #[serde(default)]
+    pub usage_overrides: std::collections::HashMap<String, String>,
 }
 
 /// 把任意 token 字符串掩码成 `prefix***last4`,保留可识别前缀 + 后 4 位。
@@ -98,6 +102,7 @@ impl From<StoredSettings> for AppSettings {
             // github_token 也是敏感字段,同样掩码
             github_token: s.github_token.as_deref().map(mask_token),
             skill_targets: s.skill_targets,
+            usage_overrides: s.usage_overrides,
         }
     }
 }
@@ -127,6 +132,7 @@ pub fn update_settings(
     stored.npm_registry = settings.npm_registry;
     stored.auto_inject_npm_registry = settings.auto_inject_npm_registry;
     stored.skill_targets = settings.skill_targets;
+    stored.usage_overrides = settings.usage_overrides;
     state.storage.save_settings(&stored).map_err(|e| e.to_string())?;
     let token = stored.mcp_token.clone().unwrap_or_default();
     // 原子绑 (token, generation):锁内一次性 bump gen + 写 token,
@@ -246,6 +252,7 @@ mod tests {
             mcp_token: Some("mcpr_abcdefgh1234567".into()),
             github_token: Some("ghp_1234567890abcdefghij".into()),
             skill_targets: vec![],
+            usage_overrides: std::collections::HashMap::new(),
         };
         let wire: AppSettings = stored.into();
         // 永远不应出现完整 token
@@ -283,6 +290,7 @@ mod tests {
             mcp_token: None,
             github_token: None,
             skill_targets: vec![],
+            usage_overrides: std::collections::HashMap::new(),
         }
     }
 }

@@ -296,8 +296,10 @@ pub struct DataSourceStatus {
     pub exists: bool,
 }
 
-pub fn get_usage_data_sources() -> Vec<DataSourceStatus> {
-    let paths = crate::usage::paths::UsagePaths::detect();
+pub fn get_usage_data_sources(
+    overrides: &std::collections::HashMap<String, String>,
+) -> Vec<DataSourceStatus> {
+    let paths = crate::usage::paths::UsagePaths::detect().apply_overrides(overrides);
     [
         ("opencode", "OpenCode", &paths.opencode_db),
         ("claude", "Claude Code", &paths.claude_projects),
