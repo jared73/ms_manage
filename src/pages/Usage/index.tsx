@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getModelStats, getUsageSummary, getUsageSummaryByApp, getUsageTrends,
-  type DailyStats, type ModelStats, type UsageSummary, type UsageSummaryByApp } from "@/lib/ipc";
+import { getModelStats, getProviderStats, getUsageSummary, getUsageTrends,
+  type DailyStats, type ModelStats, type ProviderStats, type UsageSummary } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import { Section } from "@/components/Section";
 import { UsageHero } from "./UsageHero";
 import { UsageTrendChart } from "./UsageTrendChart";
 import { ModelStatsTable } from "./ModelStatsTable";
+import { ProviderStatsTable } from "./ProviderStatsTable";
 import { RequestLogTable } from "./RequestLogTable";
 import { DataSourcesPanel } from "./DataSourcesPanel";
 import { PricingPanel } from "./PricingPanel";
@@ -18,6 +19,14 @@ const RANGES = [
   { key: "90d", days: 90 },
   { key: "all", days: -1 },
 ] as const;
+
+type TabKey = "logs" | "providers" | "models";
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "logs", label: "usage.request_logs" },
+  { key: "providers", label: "usage.provider_stats" },
+  { key: "models", label: "usage.model_stats" },
+];
 
 function rangeToEpoch(days: number): number | undefined {
   if (days === -1) return undefined;
@@ -32,9 +41,10 @@ function rangeToEpoch(days: number): number | undefined {
 export function Usage() {
   const { t } = useTranslation();
   const [rangeKey, setRangeKey] = useState<(typeof RANGES)[number]["key"]>("30d");
+  const [tab, setTab] = useState<TabKey>("logs");
   const [summary, setSummary] = useState<UsageSummary | null>(null);
-  const [byApp, setByApp] = useState<UsageSummaryByApp[]>([]);
   const [trends, setTrends] = useState<DailyStats[]>([]);
+  const [providers, setProviders] = useState<ProviderStats[]>([]);
   const [models, setModels] = useState<ModelStats[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState(0);
@@ -47,17 +57,17 @@ export function Usage() {
   const load = useCallback(async () => {
     const reqId = ++requestSeqRef.current;
     try {
-      const [s, b, tr, m] = await Promise.all([
+      const [s, tr, p, m] = await Promise.all([
         getUsageSummary(startDate),
-        getUsageSummaryByApp(startDate),
         getUsageTrends(startDate, undefined, grouping),
+        getProviderStats(startDate),
         getModelStats(startDate),
       ]);
       // 丢弃过期响应（快速切换 range 时旧请求可能晚返回）
       if (reqId !== requestSeqRef.current) return;
       setSummary(s);
-      setByApp(b);
       setTrends(tr);
+      setProviders(p);
       setModels(m);
       setError(null);
     } catch (e) {
@@ -124,28 +134,24 @@ export function Usage() {
         <DataSourcesPanel onSynced={load} />
       </div>
 
-      {byApp.length > 0 && (
-        <Section title={t("usage.by_app")}>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {byApp.map((a) => (
-              <div key={a.appType} className="rounded-xl border border-border p-3">
-                <div className="text-xs font-medium">{a.appType}</div>
-                <div className="mt-1 text-lg font-bold">${Number(a.totalCost).toFixed(2)}</div>
-                <div className="text-2xs text-fg-muted">{a.requestCount.toLocaleString()} req</div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
+      <div className="flex gap-1 rounded-lg border border-border p-0.5 w-fit">
+        {TABS.map((tb) => (
+          <button
+            key={tb.key}
+            onClick={() => setTab(tb.key)}
+            className={`rounded-md px-3 py-1 text-xs ${
+              tab === tb.key ? "bg-accent text-white" : "text-fg-muted hover:text-fg"
+            }`}
+          >
+            {t(tb.label)}
+          </button>
+        ))}
+      </div>
 
-      {models.length > 0 && (
-        <Section title={t("usage.by_model")}>
-          <ModelStatsTable data={models} />
-        </Section>
-      )}
-
-      <Section title={t("usage.request_logs")}>
-        <RequestLogTable startDate={startDate} />
+      <Section>
+        {tab === "logs" && <RequestLogTable startDate={startDate} />}
+        {tab === "providers" && <ProviderStatsTable data={providers} />}
+        {tab === "models" && <ModelStatsTable data={models} />}
       </Section>
 
       <Section title={t("usage.model_pricing")}>

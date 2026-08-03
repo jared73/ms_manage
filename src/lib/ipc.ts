@@ -330,6 +330,17 @@ export interface ModelStats {
   totalCost: string;
 }
 
+export interface ProviderStats {
+  appType: string;
+  requestCount: number;
+  totalCost: string;
+  totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+}
+
 export interface DataSourceStatus {
   appType: string;
   label: string;
@@ -366,6 +377,8 @@ export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: 
   invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping });
 export const getModelStats = (startDate?: number, endDate?: number) =>
   invoke<ModelStats[]>("get_model_stats", { startDate, endDate });
+export const getProviderStats = (startDate?: number, endDate?: number) =>
+  invoke<ProviderStats[]>("get_provider_stats", { startDate, endDate });
 export const getUsageDataSources = () => invoke<DataSourceStatus[]>("get_usage_data_sources");
 export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_usage");
 export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");

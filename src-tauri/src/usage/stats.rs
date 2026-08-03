@@ -28,6 +28,19 @@ pub struct UsageSummaryByApp {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderStats {
+    pub app_type: String,
+    pub request_count: u64,
+    pub total_cost: String,
+    pub total_tokens: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_creation_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DailyStats {
     pub date: String,
     pub request_count: u64,
@@ -192,6 +205,74 @@ pub fn get_usage_summary_by_app(
             request_count: req as u64,
             total_cost: format!("{:.6}", cost),
             total_tokens: tokens as u64,
+        });
+    }
+    Ok(out)
+}
+
+pub fn get_provider_stats(
+    db: &UsageDb,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+) -> Result<Vec<ProviderStats>> {
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(s) = start_date {
+        conditions.push("created_at >= ?");
+        params.push(Box::new(s));
+    }
+    if let Some(e) = end_date {
+        conditions.push("created_at <= ?");
+        params.push(Box::new(e));
+    }
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let conn = db.conn.lock();
+    let fresh_input = fresh_input_sql("");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT app_type, COUNT(*), COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0),
+                    COALESCE(SUM({fresh_input} + output_tokens + cache_creation_tokens + cache_read_tokens), 0),
+                    COALESCE(SUM({fresh_input}), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(cache_creation_tokens), 0)
+             FROM request_logs {where_clause}
+             GROUP BY app_type ORDER BY app_type"
+        ))
+        .context("prepare provider_stats 失败")?;
+
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter().map(|p| p as &dyn rusqlite::ToSql)), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+            ))
+        })
+        .context("query provider_stats 失败")?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (app, req, cost, tokens, ti, to, cr, cc) = row.context("读取 provider_stats 行失败")?;
+        out.push(ProviderStats {
+            app_type: app,
+            request_count: req as u64,
+            total_cost: format!("{:.6}", cost),
+            total_tokens: tokens as u64,
+            total_input_tokens: ti as u64,
+            total_output_tokens: to as u64,
+            total_cache_read_tokens: cr as u64,
+            total_cache_creation_tokens: cc as u64,
         });
     }
     Ok(out)

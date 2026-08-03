@@ -521,6 +521,8 @@ export default {
     trend: "Usage Trend",
     by_app: "By App",
     by_model: "By Model",
+    provider_stats: "Provider Stats",
+    model_stats: "Model Stats",
     data_sources: "Data Sources",
     sync_now: "Sync Now",
     sync_done: "Synced: {{imported}} imported, {{skipped}} skipped",
