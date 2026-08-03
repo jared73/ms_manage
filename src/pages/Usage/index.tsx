@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getModelStats, getUsageSummary, getUsageSummaryByApp, getUsageTrends,
   type DailyStats, type ModelStats, type UsageSummary, type UsageSummaryByApp } from "@/lib/ipc";
@@ -30,9 +30,12 @@ export function Usage() {
   const [models, setModels] = useState<ModelStats[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const startDate = useMemo(() => rangeToEpoch(RANGES.find((r) => r.key === rangeKey)!.days), [rangeKey]);
+  const startDate = useMemo(() => rangeToEpoch((RANGES.find((r) => r.key === rangeKey) ?? RANGES[0]).days), [rangeKey]);
+
+  const requestSeqRef = useRef(0);
 
   const load = useCallback(async () => {
+    const reqId = ++requestSeqRef.current;
     try {
       const [s, b, tr, m] = await Promise.all([
         getUsageSummary(startDate),
@@ -40,12 +43,15 @@ export function Usage() {
         getUsageTrends(startDate),
         getModelStats(startDate),
       ]);
+      // 丢弃过期响应（快速切换 range 时旧请求可能晚返回）
+      if (reqId !== requestSeqRef.current) return;
       setSummary(s);
       setByApp(b);
       setTrends(tr);
       setModels(m);
       setError(null);
     } catch (e) {
+      if (reqId !== requestSeqRef.current) return;
       setError(describeError(e));
     }
   }, [startDate]);
@@ -81,7 +87,7 @@ export function Usage() {
         <Section title={t("usage.trend")} className="lg:col-span-2">
           <UsageTrendChart data={trends} />
         </Section>
-        <DataSourcesPanel />
+        <DataSourcesPanel onSynced={load} />
       </div>
 
       {byApp.length > 0 && (

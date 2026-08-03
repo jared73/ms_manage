@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { getUsageDataSources, syncSessionUsage, type DataSourceStatus, type SessionSyncResult } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 
-export function DataSourcesPanel() {
+export function DataSourcesPanel({ onSynced }: { onSynced?: () => void }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<DataSourceStatus[]>([]);
   const [syncing, setSyncing] = useState(false);
@@ -28,6 +28,7 @@ export function DataSourcesPanel() {
       const r: SessionSyncResult = await syncSessionUsage();
       toast.success(t("usage.sync_done", { imported: r.imported, skipped: r.skipped }));
       await refresh();
+      onSynced?.();
     } catch (e) {
       toast.error(describeError(e));
     } finally {
