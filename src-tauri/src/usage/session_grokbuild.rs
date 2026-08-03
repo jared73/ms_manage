@@ -1,5 +1,8 @@
 use crate::usage::paths::UsagePaths;
-use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
+use crate::usage::pricing::{
+    calculate_cost, find_model_pricing, input_includes_cache_read, CostBreakdown, ModelPricing,
+    TokenUsage,
+};
 use crate::usage::session_common::{
     get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
@@ -99,7 +102,8 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
             };
             let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
 
-            // 有 CLI 自报成本则优先使用，否则定价表估算
+            // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
+            // 本地定价的取舍见 compute_costs 注释
             let reported = if event.cost_ticks > 0 {
                 Decimal::from(event.cost_ticks) / Decimal::from(10_000_000_000u64)
             } else {
@@ -114,26 +118,9 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                 model: Some(model.clone()),
             };
             let conn = db.conn.lock();
-            let (costs, total) = match find_model_pricing(&conn, model) {
-                Some(pricing) if reported == Decimal::ZERO || event.cost_partial => {
-                    let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("grokbuild"));
-                    let t = if reported == Decimal::ZERO {
-                        c.total_cost.to_string()
-                    } else {
-                        reported.to_string()
-                    };
-                    (c, t)
-                }
-                Some(_) => (
-                    crate::usage::pricing::CostBreakdown::default(),
-                    reported.to_string(),
-                ),
-                None => (
-                    crate::usage::pricing::CostBreakdown::default(),
-                    if reported == Decimal::ZERO { "0".to_string() } else { reported.to_string() },
-                ),
-            };
+            let pricing = find_model_pricing(&conn, model);
             drop(conn);
+            let (costs, total) = compute_costs(pricing.as_ref(), &usage, reported, event.cost_partial);
 
             let inserted = crate::usage::session_common::insert_request_log(
                 db,
@@ -164,6 +151,39 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
     }
 
     Ok(result)
+}
+
+/// total_cost 取值优先级（对齐 cc-switch 参考实现 insert_grok_session_entry）：
+/// 1. 有自报且完整（costIsPartial=false）→ 以自报为准（上游 ground truth），
+///    本地定价只负责分项与展示；
+/// 2. 自报不完整（costIsPartial=true）→ 自报只是下界：有本地价用本地全额复算
+///    （token 数完整）；无价则仍用自报下界（好过记 0）；
+/// 3. 无自报 → 本地复算；彻底无价才整单记 0。
+/// 分项（CostBreakdown）始终按本地定价复算，供展示；total 按上述优先级。
+fn compute_costs(
+    pricing: Option<&ModelPricing>,
+    usage: &TokenUsage,
+    reported: Decimal,
+    cost_partial: bool,
+) -> (CostBreakdown, String) {
+    let costs = if let Some(p) = &pricing {
+        calculate_cost(usage, p, input_includes_cache_read("grokbuild"))
+    } else {
+        CostBreakdown::default()
+    };
+    let has_reported = reported > Decimal::ZERO;
+    let total_cost = if has_reported && !cost_partial {
+        reported.to_string()
+    } else if has_reported && cost_partial && pricing.is_some() {
+        costs.total_cost.to_string()
+    } else if has_reported {
+        reported.to_string()
+    } else if pricing.is_some() {
+        costs.total_cost.to_string()
+    } else {
+        "0".to_string()
+    };
+    (costs, total_cost)
 }
 
 struct GrokCounters {
@@ -217,10 +237,15 @@ fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
         }
         per_model.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // CLI 成本在各模型对象内（modelUsage.<model>.costUsdTicks），从 per_model 聚合；
-        // 无 modelUsage 时 fallback 为 unknown 计数器，已含 usage 顶层字段
+        // CLI 成本在各模型对象内（modelUsage.<model>.costUsdTicks），按 per-model
+        // 求和；无 modelUsage 时 per_model 已退化为 unknown 计数器（含 usage 顶层字段）
         let cost_ticks = per_model.iter().map(|(_, c)| c.cost_ticks).sum();
-        let cost_partial = per_model.iter().any(|(_, c)| c.cost_partial);
+        // costIsPartial 主位置在 usage 顶层（对本事件全部模型生效），per-model 仅兜底
+        let cost_partial = usage
+            .get("costIsPartial")
+            .and_then(|v| v.as_bool())
+            .or_else(|| per_model.iter().any(|(_, c)| c.cost_partial).then_some(true))
+            .unwrap_or(false);
 
         events.push(GrokUsageEvent {
             created_at,
@@ -271,17 +296,62 @@ mod tests {
 
     #[test]
     fn parses_turn_completed_ignores_noise() {
-        let content = concat!(
-            "not json\n",
-            "{\"timestamp\":\"2026-07-20T13:26:20Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_snapshot\",\"prompt_id\":\"px\",\"usage\":{\"inputTokens\":9999,\"outputTokens\":9,\"cachedReadTokens\":0}}}}\n",
-            "{\"timestamp\":\"2026-07-20T13:26:24Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p1\",\"usage\":{\"modelUsage\":{\"grok-4.5-build\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"costUsdTicks\":338880000}}}}}}\n"
-        );
-        let events = parse_grok_usage_events(content);
+        let content = vec![
+            "not json\n".to_string(),
+            "{\"timestamp\":\"2026-07-20T13:26:20Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_snapshot\",\"prompt_id\":\"px\",\"usage\":{\"inputTokens\":9999,\"outputTokens\":9,\"cachedReadTokens\":0}}}}\n".to_string(),
+            usage_line(1_692_389_184, "p1"),
+            "\n".to_string(),
+        ]
+        .concat();
+        let events = parse_grok_usage_events(&content);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].prompt_id, "p1");
         assert_eq!(events[0].per_model[0].0, "grok-4.5-build");
         assert_eq!(events[0].per_model[0].1.input, 16632);
         assert_eq!(events[0].cost_ticks, 338_880_000);
+    }
+
+    /// 带事件级顶层 costIsPartial 标记的变体（per-model 未标 partial）
+    fn usage_line_partial(epoch: i64, prompt_id: &str) -> String {
+        format!(
+            r#"{{"timestamp":{epoch},"method":"_x.ai/session/update","params":{{"update":{{"sessionUpdate":"turn_completed","prompt_id":"{prompt_id}","usage":{{"costIsPartial":true,"modelUsage":{{"grok-4.5-build":{{"inputTokens":16632,"outputTokens":104,"cachedReadTokens":0,"reasoningTokens":0,"costUsdTicks":1000}}}}}}}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn partial_cost_prefers_local_pricing() {
+        use std::str::FromStr;
+
+        // 事件级 costIsPartial=true 位于 usage 顶层（per-model 未标 partial）
+        let events = parse_grok_usage_events(&usage_line_partial(OLD_EPOCH, "p1"));
+        assert_eq!(events.len(), 1);
+        assert!(events[0].cost_partial, "顶层 costIsPartial 应提升为事件级标志");
+        assert_eq!(events[0].cost_ticks, 1_000);
+
+        let (model, turn) = &events[0].per_model[0];
+        assert_eq!(model, "grok-4.5-build");
+        let reported = Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64);
+        let pricing = ModelPricing::from_strings("2.0", "6.0", "0.30", "2.0").unwrap();
+        let usage = TokenUsage {
+            input_tokens: turn.input,
+            output_tokens: turn.output,
+            cache_read_tokens: turn.cached,
+            cache_creation_tokens: 0,
+            model: Some(model.clone()),
+        };
+
+        // costIsPartial=true：自报只是下界，有本地价时 total 必须用本地全额复算
+        let (costs, total) = compute_costs(Some(&pricing), &usage, reported, events[0].cost_partial);
+        let expected = calculate_cost(&usage, &pricing, input_includes_cache_read("grokbuild"))
+            .total_cost;
+        assert!(expected > reported, "测试前提：本地复算应高于自报下界");
+        assert_eq!(
+            Decimal::from_str(&total).unwrap(),
+            expected,
+            "partial + 有本地价：total 应为本地全额复算，而非自报下界"
+        );
+        assert_ne!(Decimal::from_str(&total).unwrap(), reported);
+        assert_eq!(costs.total_cost, expected);
     }
 
     #[test]
