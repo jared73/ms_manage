@@ -68,6 +68,7 @@ pub async fn sync_session_usage(state: State<'_, Arc<AppState>>) -> Result<Sessi
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricingInput {
     pub model_id: String,
+    pub display_name: Option<String>,
     pub input_cost_per_million: String,
     pub output_cost_per_million: String,
     pub cache_read_cost_per_million: String,
@@ -101,6 +102,13 @@ pub fn get_model_pricing(
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+fn validate_price(name: &str, model: &str, v: &str) -> Result<(), String> {
+    match v.trim().parse::<f64>() {
+        Ok(n) if n >= 0.0 => Ok(()),
+        _ => Err(format!("模型 {model} 的 {name} 定价非法: {v}")),
+    }
+}
+
 #[tauri::command]
 pub fn update_model_pricing_batch(
     state: State<'_, Arc<AppState>>,
@@ -108,13 +116,25 @@ pub fn update_model_pricing_batch(
 ) -> Result<(), String> {
     let db = state.usage_db.clone();
     let conn = db.conn.lock();
+    for item in &items {
+        validate_price("input_cost_per_million", &item.model_id, &item.input_cost_per_million)?;
+        validate_price("output_cost_per_million", &item.model_id, &item.output_cost_per_million)?;
+        validate_price("cache_read_cost_per_million", &item.model_id, &item.cache_read_cost_per_million)?;
+        validate_price("cache_creation_cost_per_million", &item.model_id, &item.cache_creation_cost_per_million)?;
+    }
     for item in items {
+        let display_name = item
+            .display_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&item.model_id);
         conn.execute(
             "INSERT INTO model_pricing (model_id, display_name,
                 input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million)
-             VALUES (?1, ?1, ?2, ?3, ?4, ?5)
+             VALUES (?1, ?6, ?2, ?3, ?4, ?5)
              ON CONFLICT(model_id) DO UPDATE SET
+                display_name = excluded.display_name,
                 input_cost_per_million = excluded.input_cost_per_million,
                 output_cost_per_million = excluded.output_cost_per_million,
                 cache_read_cost_per_million = excluded.cache_read_cost_per_million,
@@ -125,6 +145,7 @@ pub fn update_model_pricing_batch(
                 item.output_cost_per_million,
                 item.cache_read_cost_per_million,
                 item.cache_creation_cost_per_million,
+                display_name,
             ],
         )
         .map_err(|e| e.to_string())?;

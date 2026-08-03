@@ -40,6 +40,25 @@ pub struct UsageDb {
 
 impl UsageDb {
     pub fn open(path: &std::path::Path) -> Result<Arc<Self>> {
+        match Self::open_inner(path) {
+            Ok(db) => Ok(db),
+            Err(_) => {
+                // 损坏恢复：改名损坏库 + 重建空库，避免阻塞 App 启动
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let corrupt = std::path::PathBuf::from(format!("{}.corrupt-{}", path.display(), timestamp));
+                let _ = std::fs::rename(path, &corrupt);
+                let _ = std::fs::remove_file(std::path::PathBuf::from(format!("{}-wal", path.display())));
+                let _ = std::fs::remove_file(std::path::PathBuf::from(format!("{}-shm", path.display())));
+                eprintln!("[USAGE] usage.db 损坏，已重命名为 {} 并重建", corrupt.display());
+                Self::open_inner(path)
+            }
+        }
+    }
+
+    fn open_inner(path: &std::path::Path) -> Result<Arc<Self>> {
         let conn = rusqlite::Connection::open(path)
             .with_context(|| format!("打开 usage.db 失败: {}", path.display()))?;
         let db = Arc::new(UsageDb { conn: Mutex::new(conn) });
