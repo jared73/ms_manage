@@ -1,6 +1,6 @@
 export default {
   app: { title: "MS Manage", tagline: "MCP · Skill Manager" },
-  nav: { dashboard: "Overview", servers: "MCP Servers", skills: "Skills", memories: "Global Memory", connections: "Connections", market: "Plugins", logs: "Logs", settings: "Settings" },
+  nav: { dashboard: "Overview", servers: "MCP Servers", skills: "Skills", memories: "Global Memory", connections: "Connections", market: "Plugins", logs: "Logs", usage: "Usage Stats", settings: "Settings" },
   common: {
     add: "Add", edit: "Edit", delete: "Delete", save: "Save", cancel: "Cancel", confirm: "Confirm",
     refresh: "Refresh", search: "Search", start: "Start", stop: "Stop", restart: "Restart", test: "Test",
@@ -498,6 +498,19 @@ export default {
     update_download_failed: "Update failed: {{msg}}",
     update_check_failed: "Update check failed: {{msg}}",
     update_restarting: "Download complete, restarting to install…",
+  },
+  usage: {
+    total_cost: "Total Cost",
+    total_tokens: "Total Tokens",
+    total_requests: "Total Requests",
+    model: "Model",
+    trend: "Usage Trend",
+    by_app: "By App",
+    by_model: "By Model",
+    data_sources: "Data Sources",
+    sync_now: "Sync Now",
+    sync_done: "Synced: {{imported}} imported, {{skipped}} skipped",
+    range: { "7d": "7 days", "30d": "30 days", "90d": "90 days", all: "All" },
   },
   status: { starting: "Starting", running: "Running", stopped: "Stopped", error: "Error", disabled: "Disabled" },
   projects: {

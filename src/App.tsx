@@ -13,6 +13,7 @@ import { Memories } from "@/pages/Memories";
 import { Connections } from "@/pages/Connections";
 import { Settings } from "@/pages/Settings";
 import { Logs } from "@/pages/Logs";
+import { Usage } from "@/pages/Usage";
 import { getSettings } from "@/lib/ipc";
 import { useApp } from "@/stores/app";
 
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="/memories" element={<Memories />} />
             <Route path="/connections" element={<Connections />} />
             <Route path="/logs" element={<Logs />} />
+            <Route path="/usage" element={<Usage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

@@ -11,6 +11,7 @@ export default {
     connections: "客户端接入",
     market: "可用插件",
     logs: "日志",
+    usage: "使用统计",
     settings: "设置",
   },
   common: {
@@ -576,6 +577,19 @@ export default {
     update_download_failed: "更新失败:{{msg}}",
     update_check_failed: "检查更新失败:{{msg}}",
     update_restarting: "下载完成，正在重启安装…",
+  },
+  usage: {
+    total_cost: "总费用",
+    total_tokens: "总 Token",
+    total_requests: "总请求数",
+    model: "模型",
+    trend: "用量趋势",
+    by_app: "按应用",
+    by_model: "按模型",
+    data_sources: "数据源",
+    sync_now: "立即同步",
+    sync_done: "同步完成: 导入 {{imported}} 条, 跳过 {{skipped}} 条",
+    range: { "7d": "近 7 天", "30d": "近 30 天", "90d": "近 90 天", all: "全部" },
   },
   status: {
     starting: "启动中",
