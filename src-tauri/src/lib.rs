@@ -93,17 +93,29 @@ pub fn run() {
                 let db = state.usage_db.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
-                        let _guard = crate::usage::sync_mutex().lock();
-                        let paths = crate::usage::paths::UsagePaths::detect();
-                        if let Ok(result) = crate::usage::sync_all(&db, &paths) {
-                            if result.imported > 0 {
-                                eprintln!("[USAGE-SYNC] 后台同步: 导入 {} 条", result.imported);
+                        let db = db.clone();
+                        let result = tauri::async_runtime::spawn_blocking(move || {
+                            let _guard = crate::usage::sync_mutex().lock();
+                            let paths = crate::usage::paths::UsagePaths::detect();
+                            crate::usage::sync_all(&db, &paths)
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok(sync_result)) => {
+                                if sync_result.imported > 0 {
+                                    eprintln!("[USAGE-SYNC] 后台同步: 导入 {} 条", sync_result.imported);
+                                }
+                                for e in &sync_result.errors {
+                                    eprintln!("[USAGE-SYNC] {e}");
+                                }
                             }
-                            for e in &result.errors {
-                                eprintln!("[USAGE-SYNC] {e}");
+                            Ok(Err(e)) => {
+                                eprintln!("[USAGE-SYNC] 同步失败: {e:#}");
+                            }
+                            Err(e) => {
+                                eprintln!("[USAGE-SYNC] 后台任务异常: {e}");
                             }
                         }
-                        drop(_guard);
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     }
                 });

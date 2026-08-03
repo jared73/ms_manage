@@ -55,6 +55,7 @@ pub fn get_usage_data_sources() -> Vec<crate::usage::stats::DataSourceStatus> {
 pub async fn sync_session_usage(state: State<'_, Arc<AppState>>) -> Result<SessionSyncResult, String> {
     let db = state.usage_db.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let _guard = crate::usage::sync_mutex().lock();
         let paths = crate::usage::paths::UsagePaths::detect();
         crate::usage::sync_all(&db, &paths)
     })
