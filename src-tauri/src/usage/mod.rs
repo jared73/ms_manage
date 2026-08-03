@@ -5,8 +5,7 @@ pub mod session_common;
 pub mod session_claude;
 pub mod session_codex;
 pub mod session_gemini;
-// TODO(usage): created in later task
-// pub mod session_grokbuild;
+pub mod session_grokbuild;
 pub mod session_opencode;
 // TODO(usage): created in later task
 // pub mod stats;
