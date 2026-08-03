@@ -152,7 +152,8 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         let conn = db.conn.lock();
         let (costs, total) = match find_model_pricing(&conn, &model) {
             Some(pricing) => {
-                let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("codex"));
+                let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "codex");
+                let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("codex"), multiplier);
                 let t = c.total_cost.to_string();
                 (c, t)
             }

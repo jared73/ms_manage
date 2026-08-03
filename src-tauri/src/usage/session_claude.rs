@@ -245,7 +245,8 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
     };
     let (costs, total) = match find_model_pricing(&conn, &msg.model) {
         Some(pricing) => {
-            let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("claude"));
+            let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "claude");
+            let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("claude"), multiplier);
             let t = c.total_cost.to_string();
             (c, t)
         }

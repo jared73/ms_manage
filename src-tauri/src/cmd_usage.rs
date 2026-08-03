@@ -135,6 +135,71 @@ fn validate_price(name: &str, model: &str, v: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn delete_model_pricing(
+    state: State<'_, Arc<AppState>>,
+    model_id: String,
+) -> Result<(), String> {
+    let db = state.usage_db.clone();
+    let conn = db.conn.lock();
+    conn.execute("DELETE FROM model_pricing WHERE model_id = ?1", [&model_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// app 级成本倍率配置
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigInput {
+    pub app_type: String,
+    pub cost_multiplier: String,
+}
+
+#[tauri::command]
+pub fn get_app_configs(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let db = state.usage_db.clone();
+    let conn = db.conn.lock();
+    let mut stmt = conn
+        .prepare("SELECT app_type, cost_multiplier FROM app_config ORDER BY app_type")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "appType": r.get::<_, String>(0)?,
+                "costMultiplier": r.get::<_, String>(1)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_app_config_batch(
+    state: State<'_, Arc<AppState>>,
+    items: Vec<AppConfigInput>,
+) -> Result<(), String> {
+    let db = state.usage_db.clone();
+    let conn = db.conn.lock();
+    for item in &items {
+        match item.cost_multiplier.trim().parse::<f64>() {
+            Ok(n) if n > 0.0 => {}
+            _ => return Err(format!("应用 {} 的成本倍率非法: {}", item.app_type, item.cost_multiplier)),
+        }
+    }
+    for item in items {
+        conn.execute(
+            "INSERT INTO app_config (app_type, cost_multiplier)
+             VALUES (?1, ?2)
+             ON CONFLICT(app_type) DO UPDATE SET cost_multiplier = excluded.cost_multiplier",
+            rusqlite::params![item.app_type, item.cost_multiplier.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn update_model_pricing_batch(
     state: State<'_, Arc<AppState>>,
     items: Vec<ModelPricingInput>,

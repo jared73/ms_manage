@@ -63,6 +63,11 @@ pub fn init_schema(db: &crate::usage::UsageDb) -> Result<()> {
             cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
         );
 
+        CREATE TABLE IF NOT EXISTS app_config (
+            app_type TEXT PRIMARY KEY,
+            cost_multiplier TEXT NOT NULL DEFAULT '1.0'
+        );
+
         CREATE TABLE IF NOT EXISTS session_log_sync (
             file_path TEXT PRIMARY KEY,
             last_modified INTEGER NOT NULL,

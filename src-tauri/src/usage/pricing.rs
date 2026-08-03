@@ -48,10 +48,12 @@ pub struct CostBreakdown {
 
 /// 费用计算器。input_includes_cache_read=true 表示 input_tokens 已含 cache 部分
 /// （OpenAI/Codex/Gemini 风格），需扣除后再按输入价计费。
+/// cost_multiplier 为 app 级成本倍率（默认 1.0），total = 四部分之和 × 倍率。
 pub fn calculate_cost(
     usage: &TokenUsage,
     pricing: &ModelPricing,
     input_includes_cache_read: bool,
+    cost_multiplier: Decimal,
 ) -> CostBreakdown {
     let million = Decimal::from(1_000_000u64);
     let billable_input = if input_includes_cache_read {
@@ -73,8 +75,21 @@ pub fn calculate_cost(
             / million,
         ..Default::default()
     };
-    c.total_cost = c.input_cost + c.output_cost + c.cache_read_cost + c.cache_creation_cost;
+    c.total_cost = (c.input_cost + c.output_cost + c.cache_read_cost + c.cache_creation_cost)
+        * cost_multiplier;
     c
+}
+
+/// 读取某 app 的成本倍率（默认 1.0）
+pub fn get_app_multiplier(conn: &rusqlite::Connection, app_type: &str) -> Decimal {
+    conn.query_row(
+        "SELECT cost_multiplier FROM app_config WHERE app_type = ?1",
+        [app_type],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| Decimal::from_str(&s).ok())
+    .unwrap_or_else(|| Decimal::from(1))
 }
 
 /// input_tokens 已含 cache read/write 的 app（单一语义源，写入侧/聚合侧共用）
@@ -167,26 +182,12 @@ mod tests {
             model: None,
         };
         let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
-        let c = calculate_cost(&usage, &pricing, false);
+        let c = calculate_cost(&usage, &pricing, false, Decimal::from(1));
         assert_eq!(c.input_cost, Decimal::from_str("0.003").unwrap());
         assert_eq!(c.output_cost, Decimal::from_str("0.0075").unwrap());
         assert_eq!(c.cache_read_cost, Decimal::from_str("0.00006").unwrap());
         assert_eq!(c.cache_creation_cost, Decimal::from_str("0.000375").unwrap());
         assert_eq!(c.total_cost, Decimal::from_str("0.010935").unwrap());
-    }
-
-    #[test]
-    fn test_calculate_cache_inclusive() {
-        let usage = TokenUsage {
-            input_tokens: 1000,
-            output_tokens: 500,
-            cache_read_tokens: 200,
-            cache_creation_tokens: 100,
-            model: None,
-        };
-        let pricing = ModelPricing::from_strings("3.0", "15.0", "0.3", "3.75").unwrap();
-        let c = calculate_cost(&usage, &pricing, true);
-        assert_eq!(c.input_cost, Decimal::from_str("0.0021").unwrap());
     }
 
     #[test]

@@ -384,6 +384,19 @@ export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_us
 export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");
 export const updateModelPricingBatch = (items: ModelPricingInput[]) =>
   invoke<void>("update_model_pricing_batch", { items });
+export const deleteModelPricing = (modelId: string) => invoke<void>("delete_model_pricing", { modelId });
+
+export interface AppConfig {
+  appType: string;
+  costMultiplier: string;
+}
+export interface AppConfigInput {
+  appType: string;
+  costMultiplier: string;
+}
+export const getAppConfigs = () => invoke<AppConfig[]>("get_app_configs");
+export const updateAppConfigBatch = (items: AppConfigInput[]) =>
+  invoke<void>("update_app_config_batch", { items });
 
 export interface RequestLogRow {
   requestId: string;

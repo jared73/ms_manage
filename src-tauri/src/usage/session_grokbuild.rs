@@ -120,6 +120,7 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
             };
             let conn = db.conn.lock();
             let pricing = find_model_pricing(&conn, model);
+            let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "grokbuild");
             drop(conn);
             // 顶层 costIsPartial 覆盖整事件；per-model 标记再单独兜底该行
             let (costs, total) = compute_costs(
@@ -127,6 +128,7 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                 &usage,
                 reported,
                 event.cost_partial || turn.cost_partial,
+                multiplier,
             );
 
             let inserted = crate::usage::session_common::insert_request_log(
@@ -168,30 +170,33 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
 ///    （token 数完整）；无价则仍用自报下界（好过记 0）；
 /// 3. 无自报 → 本地复算；彻底无价才整单记 0。
 /// 分项（CostBreakdown）始终按本地定价复算，供展示；total 按上述优先级。
+/// cost_multiplier 为 app 级成本倍率：本地复算分支的 total 已由 calculate_cost 内置
+/// 倍率（costs.total_cost），自报分支单独乘倍率，保证全局倍率一致生效。
 fn compute_costs(
     pricing: Option<&ModelPricing>,
     usage: &TokenUsage,
     reported: Decimal,
     cost_partial: bool,
+    multiplier: Decimal,
 ) -> (CostBreakdown, String) {
     let costs = if let Some(p) = &pricing {
-        calculate_cost(usage, p, input_includes_cache_read("grokbuild"))
+        calculate_cost(usage, p, input_includes_cache_read("grokbuild"), multiplier)
     } else {
         CostBreakdown::default()
     };
     let has_reported = reported > Decimal::ZERO;
     let total_cost = if has_reported && !cost_partial {
-        reported.to_string()
+        reported * multiplier
     } else if has_reported && cost_partial && pricing.is_some() {
-        costs.total_cost.to_string()
+        costs.total_cost
     } else if has_reported {
-        reported.to_string()
+        reported * multiplier
     } else if pricing.is_some() {
-        costs.total_cost.to_string()
+        costs.total_cost
     } else {
-        "0".to_string()
+        Decimal::ZERO
     };
-    (costs, total_cost)
+    (costs, total_cost.to_string())
 }
 
 struct GrokCounters {
@@ -346,9 +351,20 @@ mod tests {
         };
 
         // costIsPartial=true：自报只是下界，有本地价时 total 必须用本地全额复算
-        let (costs, total) = compute_costs(Some(&pricing), &usage, reported, events[0].cost_partial);
-        let expected = calculate_cost(&usage, &pricing, input_includes_cache_read("grokbuild"))
-            .total_cost;
+        let (costs, total) = compute_costs(
+            Some(&pricing),
+            &usage,
+            reported,
+            events[0].cost_partial,
+            Decimal::from(1),
+        );
+        let expected = calculate_cost(
+            &usage,
+            &pricing,
+            input_includes_cache_read("grokbuild"),
+            Decimal::from(1),
+        )
+        .total_cost;
         assert!(expected > reported, "测试前提：本地复算应高于自报下界");
         assert_eq!(
             Decimal::from_str(&total).unwrap(),

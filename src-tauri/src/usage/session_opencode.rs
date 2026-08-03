@@ -250,10 +250,12 @@ fn insert_opencode_message(
         };
         match find_model_pricing(&conn, model_id) {
             Some(pricing) => {
+                let multiplier = crate::usage::pricing::get_app_multiplier(&conn, app_type);
                 let c = crate::usage::pricing::calculate_cost(
                     &usage,
                     &pricing,
                     input_includes_cache_read(app_type),
+                    multiplier,
                 );
                 let total = c.total_cost.to_string();
                 (c, total)
