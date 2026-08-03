@@ -4,8 +4,7 @@ pub mod pricing;
 pub mod session_common;
 pub mod session_claude;
 pub mod session_codex;
-// TODO(usage): created in later task
-// pub mod session_gemini;
+pub mod session_gemini;
 // TODO(usage): created in later task
 // pub mod session_grokbuild;
 pub mod session_opencode;
