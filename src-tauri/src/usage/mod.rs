@@ -7,8 +7,7 @@ pub mod session_codex;
 pub mod session_gemini;
 pub mod session_grokbuild;
 pub mod session_opencode;
-// TODO(usage): created in later task
-// pub mod stats;
+pub mod stats;
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
