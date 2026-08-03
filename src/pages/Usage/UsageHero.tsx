@@ -4,11 +4,7 @@ import type { UsageSummary } from "@/lib/ipc";
 export function UsageHero({ summary }: { summary: UsageSummary | null }) {
   const { t } = useTranslation();
   const cost = summary ? Number(summary.totalCost) : 0;
-  const tokens =
-    (summary?.totalInputTokens ?? 0) +
-    (summary?.totalOutputTokens ?? 0) +
-    (summary?.totalCacheReadTokens ?? 0) +
-    (summary?.totalCacheCreationTokens ?? 0);
+  const tokens = summary?.totalTokens ?? 0;
 
   const cards = [
     { key: "cost", value: `$${cost.toFixed(4)}`, label: t("usage.total_cost") },

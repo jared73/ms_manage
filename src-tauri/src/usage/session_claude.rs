@@ -185,7 +185,8 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         };
         let msg_id = parsed.message_id.clone();
 
-        if messages.get(&msg_id).is_none_or(|existing| should_replace(existing, &parsed)) {
+        // is_none_or 1.82 才稳定，这里用 map_or 保持 1.77 MSRV
+        if messages.get(&msg_id).map_or(true, |existing| should_replace(existing, &parsed)) {
             messages.insert(msg_id, parsed);
         }
     }

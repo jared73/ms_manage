@@ -11,6 +11,7 @@ pub struct UsageSummary {
     pub total_output_tokens: u64,
     pub total_cache_read_tokens: u64,
     pub total_cache_creation_tokens: u64,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,7 +92,8 @@ pub fn get_usage_summary(
                         COALESCE(SUM(input_tokens), 0),
                         COALESCE(SUM(output_tokens), 0),
                         COALESCE(SUM(cache_read_tokens), 0),
-                        COALESCE(SUM(cache_creation_tokens), 0)
+                        COALESCE(SUM(cache_creation_tokens), 0),
+                        COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0)
                  FROM request_logs {where_clause}"
             ),
             rusqlite::params_from_iter(params.iter().map(|p| p as &dyn rusqlite::ToSql)),
@@ -103,12 +105,13 @@ pub fn get_usage_summary(
                     r.get::<_, i64>(3)?,
                     r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
                 ))
             },
         )
         .context("查询 usage summary 失败")?;
 
-    let (req, cost, ti, to, cr, cc) = row;
+    let (req, cost, ti, to, cr, cc, tt) = row;
     Ok(UsageSummary {
         request_count: req as u64,
         total_cost: format!("{:.6}", cost),
@@ -116,6 +119,7 @@ pub fn get_usage_summary(
         total_output_tokens: to as u64,
         total_cache_read_tokens: cr as u64,
         total_cache_creation_tokens: cc as u64,
+        total_tokens: tt as u64,
     })
 }
 

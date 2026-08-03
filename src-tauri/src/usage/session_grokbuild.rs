@@ -103,9 +103,10 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
             let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
 
             // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
-            // 本地定价的取舍见 compute_costs 注释
-            let reported = if event.cost_ticks > 0 {
-                Decimal::from(event.cost_ticks) / Decimal::from(10_000_000_000u64)
+            // 本地定价的取舍见 compute_costs 注释。用 per-model 的 cost_ticks
+            // 而非事件级求和，避免多模型 turn 的整单成本被每行重复计一次
+            let reported = if turn.cost_ticks > 0 {
+                Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64)
             } else {
                 Decimal::ZERO
             };
@@ -120,7 +121,13 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
             let conn = db.conn.lock();
             let pricing = find_model_pricing(&conn, model);
             drop(conn);
-            let (costs, total) = compute_costs(pricing.as_ref(), &usage, reported, event.cost_partial);
+            // 顶层 costIsPartial 覆盖整事件；per-model 标记再单独兜底该行
+            let (costs, total) = compute_costs(
+                pricing.as_ref(),
+                &usage,
+                reported,
+                event.cost_partial || turn.cost_partial,
+            );
 
             let inserted = crate::usage::session_common::insert_request_log(
                 db,
@@ -197,7 +204,6 @@ struct GrokCounters {
 struct GrokUsageEvent {
     created_at: i64,
     prompt_id: String,
-    cost_ticks: u64,
     cost_partial: bool,
     per_model: Vec<(String, GrokCounters)>,
 }
@@ -237,9 +243,8 @@ fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
         }
         per_model.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // CLI 成本在各模型对象内（modelUsage.<model>.costUsdTicks），按 per-model
-        // 求和；无 modelUsage 时 per_model 已退化为 unknown 计数器（含 usage 顶层字段）
-        let cost_ticks = per_model.iter().map(|(_, c)| c.cost_ticks).sum();
+        // 成本以 per-model 的 costUsdTicks 为准（GrokCounters.cost_ticks），
+        // 不再做事件级求和，避免多模型 turn 的整单成本被每行重复计入
         // costIsPartial 主位置在 usage 顶层（对本事件全部模型生效），per-model 仅兜底
         let cost_partial = usage
             .get("costIsPartial")
@@ -250,7 +255,6 @@ fn parse_grok_usage_events(content: &str) -> Vec<GrokUsageEvent> {
         events.push(GrokUsageEvent {
             created_at,
             prompt_id,
-            cost_ticks,
             cost_partial,
             per_model,
         });
@@ -308,7 +312,7 @@ mod tests {
         assert_eq!(events[0].prompt_id, "p1");
         assert_eq!(events[0].per_model[0].0, "grok-4.5-build");
         assert_eq!(events[0].per_model[0].1.input, 16632);
-        assert_eq!(events[0].cost_ticks, 338_880_000);
+        assert_eq!(events[0].per_model[0].1.cost_ticks, 338_880_000);
     }
 
     /// 带事件级顶层 costIsPartial 标记的变体（per-model 未标 partial）
@@ -326,7 +330,7 @@ mod tests {
         let events = parse_grok_usage_events(&usage_line_partial(OLD_EPOCH, "p1"));
         assert_eq!(events.len(), 1);
         assert!(events[0].cost_partial, "顶层 costIsPartial 应提升为事件级标志");
-        assert_eq!(events[0].cost_ticks, 1_000);
+        assert_eq!(events[0].per_model[0].1.cost_ticks, 1_000);
 
         let (model, turn) = &events[0].per_model[0];
         assert_eq!(model, "grok-4.5-build");
@@ -362,5 +366,66 @@ mod tests {
         let events = parse_grok_usage_events(&line);
         assert_eq!(events[0].per_model[0].0, "unknown");
         assert_eq!(events[0].per_model[0].1.input, 100);
+    }
+
+    /// 多模型 turn：每行只能用自己的 costUsdTicks，不得用事件级求和（否则双算整单成本）
+    #[test]
+    fn multi_model_event_does_not_double_count_cost() {
+        use rusqlite::Connection;
+        use std::str::FromStr;
+
+        let line = format!(
+            r#"{{"timestamp":{OLD_EPOCH},"method":"_x.ai/session/update","params":{{"update":{{"sessionUpdate":"turn_completed","prompt_id":"p1","usage":{{"modelUsage":{{"model-a":{{"inputTokens":1000,"outputTokens":10,"cachedReadTokens":0,"costUsdTicks":12500000}},"model-b":{{"inputTokens":2000,"outputTokens":20,"cachedReadTokens":0,"costUsdTicks":25000000}}}}}}}}}}}}"#
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "grok-ms-test-{}-{}",
+            std::process::id(),
+            line.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("updates.jsonl");
+        std::fs::write(&file, &line).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        let db = UsageDb { conn: parking_lot::Mutex::new(conn) };
+        crate::usage::db::init_schema(&db).unwrap();
+
+        let result = sync_single_grok_file(&db, &file).unwrap();
+        assert_eq!(result.imported, 2, "两个模型应各导入一行");
+
+        let rows = {
+            let conn = db.conn.lock();
+            let mut stmt = conn
+                .prepare("SELECT model, input_tokens, total_cost_usd FROM request_logs ORDER BY model")
+                .unwrap();
+            stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>()
+        };
+
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(rows.len(), 2);
+        // 每行 total 只能是该模型自己的 ticks，事件级求和 37_500_000 若被每行重复
+        // 计入会得到 0.00375，这里必须各归各
+        assert_eq!(rows[0].0, "model-a");
+        assert_eq!(rows[0].1, 1000);
+        assert_eq!(
+            Decimal::from_str(&rows[0].2).unwrap(),
+            Decimal::from(12_500_000u64) / Decimal::from(10_000_000_000u64)
+        );
+        assert_eq!(rows[1].0, "model-b");
+        assert_eq!(rows[1].1, 2000);
+        assert_eq!(
+            Decimal::from_str(&rows[1].2).unwrap(),
+            Decimal::from(25_000_000u64) / Decimal::from(10_000_000_000u64)
+        );
     }
 }

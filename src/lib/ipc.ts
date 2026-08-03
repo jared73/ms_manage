@@ -301,6 +301,7 @@ export interface UsageSummary {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheCreationTokens: number;
+  totalTokens: number;
 }
 
 export interface UsageSummaryByApp {
