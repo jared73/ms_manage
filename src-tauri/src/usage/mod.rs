@@ -33,6 +33,13 @@ pub fn sync_all(db: &UsageDb, paths: &paths::UsagePaths) -> Result<session_commo
     Ok(result)
 }
 
+/// 全局同步互斥，避免定时任务与手动同步并发
+pub fn sync_mutex() -> &'static parking_lot::Mutex<()> {
+    use once_cell::sync::OnceCell;
+    static LOCK: OnceCell<parking_lot::Mutex<()>> = OnceCell::new();
+    LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 /// usage.db 全局句柄，持有连接。所有 usage 模块共享。
 pub struct UsageDb {
     pub conn: Mutex<rusqlite::Connection>,

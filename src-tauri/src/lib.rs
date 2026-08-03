@@ -88,6 +88,27 @@ pub fn run() {
                 }
             });
 
+            // usage 统计后台同步：启动立即跑一次，之后每 60 秒增量检查
+            {
+                let db = state.usage_db.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        let _guard = crate::usage::sync_mutex().lock();
+                        let paths = crate::usage::paths::UsagePaths::detect();
+                        if let Ok(result) = crate::usage::sync_all(&db, &paths) {
+                            if result.imported > 0 {
+                                eprintln!("[USAGE-SYNC] 后台同步: 导入 {} 条", result.imported);
+                            }
+                            for e in &result.errors {
+                                eprintln!("[USAGE-SYNC] {e}");
+                            }
+                        }
+                        drop(_guard);
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
+                });
+            }
+
             // 系统托盘：点关闭按钮时不真关，缩到托盘；托盘菜单可显窗口 / 真退出
             let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
