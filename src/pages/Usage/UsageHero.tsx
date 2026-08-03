@@ -16,10 +16,16 @@ export function UsageHero({ summary }: { summary: UsageSummary | null }) {
     { key: "cost", value: `$${cost.toFixed(4)}`, label: t("usage.total_cost") },
     { key: "tokens", value: formatTokens(tokens), label: t("usage.total_tokens"), raw: tokens.toLocaleString() },
     { key: "requests", value: (summary?.requestCount ?? 0).toLocaleString(), label: t("usage.total_requests") },
+    {
+      key: "hitRate",
+      value: summary ? `${((summary.cacheHitRate ?? 0) * 100).toFixed(1)}%` : "0%",
+      label: t("usage.cache_hit_rate"),
+      raw: (summary?.totalCacheReadTokens ?? 0).toLocaleString(),
+    },
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {cards.map((c) => (
         <div key={c.key} className="rounded-xl border border-border bg-bg-subtle p-4">
           <div className="text-2xs text-fg-muted">{c.label}</div>

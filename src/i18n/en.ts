@@ -507,6 +507,7 @@ export default {
     total_cost: "Total Cost",
     total_tokens: "Total Tokens",
     total_requests: "Total Requests",
+    cache_hit_rate: "Cache Hit Rate",
     about: "~",
     ten_thousand: "万",
     hundred_million: "亿",

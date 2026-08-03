@@ -586,6 +586,7 @@ export default {
     total_cost: "总费用",
     total_tokens: "总 Token",
     total_requests: "总请求数",
+    cache_hit_rate: "缓存命中率",
     about: "约",
     ten_thousand: "万",
     hundred_million: "亿",
