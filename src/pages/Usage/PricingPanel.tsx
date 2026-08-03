@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { getModelPricing, updateModelPricingBatch, type ModelPricingInput } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
+import { Modal } from "@/components/Modal";
 
 export function PricingPanel() {
   const { t } = useTranslation();
@@ -71,45 +72,49 @@ export function PricingPanel() {
         </tbody>
       </table>
 
-      {editing && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => setEditing(null)}>
-          <div className="w-full max-w-md rounded-xl bg-bg p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold">{t("usage.edit_pricing")}</h3>
-            <div className="space-y-3">
-              {(
-                [
-                  ["inputCostPerMillion", t("usage.input_price")],
-                  ["outputCostPerMillion", t("usage.output_price")],
-                  ["cacheReadCostPerMillion", t("usage.cache_read_price")],
-                  ["cacheCreationCostPerMillion", t("usage.cache_creation_price")],
-                ] as const
-              ).map(([field, label]) => (
-                <div key={field}>
-                  <label className="mb-1 block text-xs text-fg-muted">{label}</label>
-                  <input
-                    type="text"
-                    value={editing[field]}
-                    onChange={(e) => setEditing({ ...editing, [field]: e.target.value })}
-                    className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setEditing(null)} className="rounded-lg border border-border px-3 py-1.5 text-xs">
-                {t("common.cancel")}
-              </button>
-              <button
-                onClick={save}
-                disabled={saving}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-              >
-                {t("common.save")}
-              </button>
-            </div>
-          </div>
+      <Modal
+        open={editing !== null}
+        title={t("usage.edit_pricing")}
+        onClose={() => setEditing(null)}
+        size="sm"
+        footer={
+          <>
+            <button onClick={() => setEditing(null)} className="rounded-lg border border-border px-3 py-1.5 text-xs">
+              {t("common.cancel")}
+            </button>
+            <button
+              onClick={save}
+              disabled={saving}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+            >
+              {t("common.save")}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {editing &&
+            (
+              [
+                ["inputCostPerMillion", t("usage.input_price")],
+                ["outputCostPerMillion", t("usage.output_price")],
+                ["cacheReadCostPerMillion", t("usage.cache_read_price")],
+                ["cacheCreationCostPerMillion", t("usage.cache_creation_price")],
+              ] as const
+            ).map(([field, label]) => (
+              <div key={field}>
+                <label className="mb-1 block text-xs text-fg-muted">{label}</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={editing[field]}
+                  onChange={(e) => setEditing({ ...editing, [field]: e.target.value })}
+                  className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+            ))}
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
