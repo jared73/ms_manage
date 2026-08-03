@@ -37,8 +37,10 @@ export function Usage() {
   const [trends, setTrends] = useState<DailyStats[]>([]);
   const [models, setModels] = useState<ModelStats[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [refreshMs, setRefreshMs] = useState(0);
 
   const startDate = useMemo(() => rangeToEpoch((RANGES.find((r) => r.key === rangeKey) ?? RANGES[0]).days), [rangeKey]);
+  const grouping = rangeKey === "today" ? "hour" : "day";
 
   const requestSeqRef = useRef(0);
 
@@ -48,7 +50,7 @@ export function Usage() {
       const [s, b, tr, m] = await Promise.all([
         getUsageSummary(startDate),
         getUsageSummaryByApp(startDate),
-        getUsageTrends(startDate),
+        getUsageTrends(startDate, undefined, grouping),
         getModelStats(startDate),
       ]);
       // 丢弃过期响应（快速切换 range 时旧请求可能晚返回）
@@ -62,28 +64,52 @@ export function Usage() {
       if (reqId !== requestSeqRef.current) return;
       setError(describeError(e));
     }
-  }, [startDate]);
+  }, [startDate, grouping]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (refreshMs <= 0) return;
+    const id = setInterval(() => {
+      void load();
+    }, refreshMs);
+    return () => clearInterval(id);
+  }, [refreshMs, load]);
+
   return (
     <div className="space-y-5 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">{t("nav.usage")}</h1>
-        <div className="flex gap-1 rounded-lg border border-border p-0.5">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              onClick={() => setRangeKey(r.key)}
-              className={`rounded-md px-3 py-1 text-xs ${
-                rangeKey === r.key ? "bg-accent text-white" : "text-fg-muted hover:text-fg"
-              }`}
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-lg border border-border p-0.5">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                onClick={() => setRangeKey(r.key)}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  rangeKey === r.key ? "bg-accent text-white" : "text-fg-muted hover:text-fg"
+                }`}
+              >
+                {t(`usage.range.${r.key}`)}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-fg-muted">
+            {t("usage.refresh")}
+            <select
+              value={refreshMs}
+              onChange={(e) => setRefreshMs(Number(e.target.value))}
+              className="rounded border border-border bg-bg px-2 py-1 text-xs text-fg-muted outline-none focus:border-accent"
             >
-              {t(`usage.range.${r.key}`)}
-            </button>
-          ))}
+              <option value={0}>{t("usage.refresh_off")}</option>
+              <option value={5000}>5s</option>
+              <option value={10000}>10s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>60s</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -93,7 +119,7 @@ export function Usage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Section title={t("usage.trend")} className="lg:col-span-2">
-          <UsageTrendChart data={trends} />
+          <UsageTrendChart data={trends} grouping={grouping} />
         </Section>
         <DataSourcesPanel onSynced={load} />
       </div>

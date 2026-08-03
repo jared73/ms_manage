@@ -30,6 +30,10 @@ pub struct DailyStats {
     pub request_count: u64,
     pub total_cost: String,
     pub total_tokens: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_creation_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +186,7 @@ pub fn get_usage_trends(
     db: &UsageDb,
     start_date: Option<i64>,
     end_date: Option<i64>,
+    grouping: &str,
 ) -> Result<Vec<DailyStats>> {
     let mut conditions = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -199,14 +204,23 @@ pub fn get_usage_trends(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
+    let date_expr = match grouping {
+        "hour" => "strftime('%Y-%m-%d %H:00', created_at, 'unixepoch', 'localtime')",
+        _ => "date(created_at, 'unixepoch', 'localtime')",
+    };
+
     let conn = db.conn.lock();
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT date(created_at, 'unixepoch', 'localtime') as day,
+            "SELECT {date_expr} AS bucket,
                     COUNT(*), COALESCE(SUM(CAST(total_cost_usd AS REAL)), 0),
-                    COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0)
+                    COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + CASE WHEN app_type IN ('codex','gemini','grokbuild') THEN 0 ELSE cache_read_tokens END), 0),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(cache_creation_tokens), 0)
              FROM request_logs {where_clause}
-             GROUP BY day ORDER BY day"
+             GROUP BY bucket ORDER BY bucket"
         ))
         .context("prepare trends 失败")?;
 
@@ -217,18 +231,26 @@ pub fn get_usage_trends(
                 r.get::<_, i64>(1)?,
                 r.get::<_, f64>(2)?,
                 r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
             ))
         })
         .context("query trends 失败")?;
 
     let mut out = Vec::new();
     for row in rows {
-        let (date, req, cost, tokens) = row.context("读取 trends 行失败")?;
+        let (date, req, cost, tokens, ti, to, cr, cc) = row.context("读取 trends 行失败")?;
         out.push(DailyStats {
             date,
             request_count: req as u64,
             total_cost: format!("{:.6}", cost),
             total_tokens: tokens as u64,
+            total_input_tokens: ti as u64,
+            total_output_tokens: to as u64,
+            total_cache_read_tokens: cr as u64,
+            total_cache_creation_tokens: cc as u64,
         });
     }
     Ok(out)

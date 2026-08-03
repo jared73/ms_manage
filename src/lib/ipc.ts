@@ -316,6 +316,10 @@ export interface DailyStats {
   requestCount: number;
   totalCost: string;
   totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
 }
 
 export interface ModelStats {
@@ -357,8 +361,8 @@ export const getUsageSummary = (
 ) => invoke<UsageSummary>("get_usage_summary", { startDate, endDate, appType });
 export const getUsageSummaryByApp = (startDate?: number, endDate?: number) =>
   invoke<UsageSummaryByApp[]>("get_usage_summary_by_app", { startDate, endDate });
-export const getUsageTrends = (startDate?: number, endDate?: number) =>
-  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate });
+export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string) =>
+  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping });
 export const getModelStats = (startDate?: number, endDate?: number) =>
   invoke<ModelStats[]>("get_model_stats", { startDate, endDate });
 export const getUsageDataSources = () => invoke<DataSourceStatus[]>("get_usage_data_sources");

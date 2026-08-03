@@ -30,9 +30,11 @@ pub fn get_usage_trends(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
     end_date: Option<i64>,
+    grouping: Option<String>,
 ) -> Result<Vec<crate::usage::stats::DailyStats>, String> {
     let db = state.usage_db.clone();
-    crate::usage::stats::get_usage_trends(&db, start_date, end_date).map_err(|e| e.to_string())
+    let grouping = grouping.as_deref().unwrap_or("day");
+    crate::usage::stats::get_usage_trends(&db, start_date, end_date, grouping).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

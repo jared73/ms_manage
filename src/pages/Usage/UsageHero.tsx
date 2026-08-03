@@ -6,9 +6,15 @@ export function UsageHero({ summary }: { summary: UsageSummary | null }) {
   const cost = summary ? Number(summary.totalCost) : 0;
   const tokens = summary?.totalTokens ?? 0;
 
-  const cards = [
+  const formatTokens = (n: number): string => {
+    if (n >= 100_000_000) return `${t("usage.about")} ${(n / 100_000_000).toFixed(2)} ${t("usage.hundred_million")}`;
+    if (n >= 10_000) return `${t("usage.about")} ${(n / 10_000).toFixed(1)} ${t("usage.ten_thousand")}`;
+    return n.toLocaleString();
+  };
+
+  const cards: { key: string; value: string; label: string; raw?: string }[] = [
     { key: "cost", value: `$${cost.toFixed(4)}`, label: t("usage.total_cost") },
-    { key: "tokens", value: tokens.toLocaleString(), label: t("usage.total_tokens") },
+    { key: "tokens", value: formatTokens(tokens), label: t("usage.total_tokens"), raw: tokens.toLocaleString() },
     { key: "requests", value: (summary?.requestCount ?? 0).toLocaleString(), label: t("usage.total_requests") },
   ];
 
@@ -18,6 +24,7 @@ export function UsageHero({ summary }: { summary: UsageSummary | null }) {
         <div key={c.key} className="rounded-xl border border-border bg-bg-subtle p-4">
           <div className="text-2xs text-fg-muted">{c.label}</div>
           <div className="mt-1 text-2xl font-bold">{c.value}</div>
+          {c.raw != null && <div className="text-2xs text-fg-muted">{c.raw}</div>}
         </div>
       ))}
     </div>
