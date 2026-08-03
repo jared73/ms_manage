@@ -125,13 +125,7 @@ pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSy
                 continue;
             }
 
-            let Some(msg) = parse_message_data(&value) else {
-                let m = format!("OpenCode 消息解析失败 {session_id}:{message_id}");
-                result.errors.push(m);
-                result.skipped += 1;
-                session_had_error = true;
-                continue;
-            };
+            let Some(msg) = parse_message_data(&value) else { continue };
 
             let request_id = format!("opencode_session:{session_id}:{message_id}");
             match insert_opencode_message(db, &request_id, &msg) {
