@@ -87,34 +87,35 @@ pub fn find_model_pricing(
     conn: &rusqlite::Connection,
     model_id: &str,
 ) -> Option<ModelPricing> {
-    let row = conn
-        .query_row(
-            "SELECT input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-             FROM model_pricing WHERE model_id = ?1",
-            [model_id],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            },
-        )
-        .ok();
+    let row = conn.query_row(
+        "SELECT input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM model_pricing WHERE model_id = ?1",
+        [model_id],
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        },
+    );
     match row {
-        Some((i, o, cr, cc)) => ModelPricing::from_strings(&i, &o, &cr, &cc).ok(),
-        None => {
+        Ok((i, o, cr, cc)) => ModelPricing::from_strings(&i, &o, &cr, &cc).ok(),
+        Err(e) => {
+            eprintln!("[USAGE-PRICING] 查询模型定价失败 {model_id}: {e}");
             // 尝试 seed 内置定价
             let seed = seed_pricing(model_id)?;
-            let _ = conn.execute(
+            if let Err(e) = conn.execute(
                 "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                     input_cost_per_million, output_cost_per_million,
                     cache_read_cost_per_million, cache_creation_cost_per_million)
                  VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![model_id, seed.0, seed.1, seed.2, seed.3],
-            );
+            ) {
+                eprintln!("[USAGE-PRICING] 写入 seed 定价失败 {model_id}: {e}");
+            }
             Some(seed.4)
         }
     }
@@ -128,8 +129,12 @@ fn seed_pricing(model_id: &str) -> Option<(&'static str, &'static str, &'static 
         m if m.starts_with("claude-3-7-sonnet") => Some(("3.0", "15.0", "0.3", "3.75")),
         m if m.starts_with("claude-3-5-haiku") => Some(("0.80", "4.0", "0.08", "1.0")),
         m if m.starts_with("claude-3-opus") => Some(("15.0", "75.0", "1.5", "18.75")),
+        m if m.starts_with("gpt-4o-mini") => Some(("0.15", "0.60", "0.075", "0.15")),
         m if m.starts_with("gpt-4o") => Some(("2.50", "10.0", "1.25", "2.50")),
+        m if m.starts_with("gpt-4.1-mini") => Some(("0.40", "1.60", "0.10", "0.40")),
+        m if m.starts_with("gpt-4.1-nano") => Some(("0.10", "0.40", "0.025", "0.10")),
         m if m.starts_with("gpt-4.1") => Some(("2.0", "8.0", "0.5", "2.0")),
+        m if m.starts_with("o3-mini") || m.starts_with("o4-mini") => Some(("1.10", "4.40", "0.55", "1.10")),
         m if m.starts_with("o3") || m.starts_with("o4") => Some(("2.0", "8.0", "0.5", "2.0")),
         m if m.starts_with("gemini-2.5-pro") => Some(("1.25", "10.0", "0.3125", "1.25")),
         m if m.starts_with("gemini-2.5-flash") => Some(("0.30", "2.50", "0.075", "0.30")),
@@ -186,5 +191,13 @@ mod tests {
         assert!(seed_pricing("claude-sonnet-4-20250514").is_some());
         assert!(seed_pricing("grok-4.5-build").is_some());
         assert!(seed_pricing("totally-unknown-model").is_none());
+    }
+
+    #[test]
+    fn test_seed_narrow_prefixes() {
+        assert_eq!(seed_pricing("gpt-4o-mini").unwrap().0, "0.15");
+        assert_eq!(seed_pricing("gpt-4o").unwrap().0, "2.50");
+        assert_eq!(seed_pricing("o4-mini").unwrap().0, "1.10");
+        assert_eq!(seed_pricing("grok-4.5-build").unwrap().0, "2.0");
     }
 }
