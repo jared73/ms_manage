@@ -9,8 +9,15 @@ use std::fs;
 use std::str::FromStr;
 use std::time::SystemTime;
 
+/// 未完成消息的容忍窗口：超过该时长仍未完成的会话视为已终止，允许推进水位线
+const INCOMPLETE_TOLERANCE_SECS: i64 = 24 * 3600;
+
 /// 同步 OpenCode 使用数据（只读打开 ~/.local/share/opencode/opencode.db）
 pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSyncResult> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let db_path = &paths.opencode_db;
     let mut result = SessionSyncResult::default();
 
@@ -81,11 +88,20 @@ pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSy
         for row in rows {
             let (message_id, data_json) = match row {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(_) => {
+                    session_had_error = true;
+                    continue;
+                }
             };
             let value: serde_json::Value = match serde_json::from_str(&data_json) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(_) => {
+                    let m = format!("OpenCode 消息解析失败 {session_id}:{message_id}");
+                    result.errors.push(m);
+                    result.skipped += 1;
+                    session_had_error = true;
+                    continue;
+                }
             };
 
             if value.get("role").and_then(|r| r.as_str()) != Some("assistant") {
@@ -94,13 +110,28 @@ pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSy
             if value.get("tokens").is_none() {
                 continue;
             }
-            // 跳过未完成消息
+            // 跳过未完成消息；超过容忍窗口的视为已终止会话，不阻塞水位线
             if value.get("time").and_then(|t| t.get("completed")).is_none() {
+                let created_ms = value
+                    .get("time")
+                    .and_then(|t| t.get("created"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                if created_ms > 0 && now - created_ms / 1000 > INCOMPLETE_TOLERANCE_SECS {
+                    result.skipped += 1;
+                    continue;
+                }
                 session_has_incomplete = true;
                 continue;
             }
 
-            let Some(msg) = parse_message_data(&value) else { continue };
+            let Some(msg) = parse_message_data(&value) else {
+                let m = format!("OpenCode 消息解析失败 {session_id}:{message_id}");
+                result.errors.push(m);
+                result.skipped += 1;
+                session_had_error = true;
+                continue;
+            };
 
             let request_id = format!("opencode_session:{session_id}:{message_id}");
             match insert_opencode_message(db, &request_id, &msg) {
@@ -124,7 +155,9 @@ pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSy
             continue;
         }
         if let Err(e) = update_sync_state(db, &sync_key, *time_updated, 0) {
-            eprintln!("[OPENCODE-SYNC] 同步状态更新失败 {session_id}: {e:#}");
+            let m = format!("OpenCode 会话同步状态更新失败 {session_id}: {e:#}");
+            eprintln!("[OPENCODE-SYNC] {m}");
+            result.errors.push(m);
             has_sync_errors = true;
         }
     }
