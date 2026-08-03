@@ -25,6 +25,7 @@ pub mod single_instance;
 pub mod state;
 pub mod storage;
 pub mod symlink;
+pub mod usage;
 
 use state::AppState;
 use std::sync::Arc;
