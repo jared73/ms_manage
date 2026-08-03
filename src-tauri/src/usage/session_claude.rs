@@ -99,6 +99,38 @@ struct ParsedAssistantUsage {
     session_id: Option<String>,
 }
 
+/// 解析一行 JSONL 为 assistant 消息使用数据；非 assistant/无 usage 返回 None
+fn parse_assistant_line(value: &serde_json::Value, session_id: Option<String>) -> Option<ParsedAssistantUsage> {
+    if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return None;
+    }
+    let message = value.get("message")?;
+    let msg_id = message.get("id").and_then(|v| v.as_str())?;
+    let usage = message.get("usage")?;
+    Some(ParsedAssistantUsage {
+        message_id: msg_id.to_string(),
+        model: message.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+        input_tokens: usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        output_tokens: usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        cache_read_tokens: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        cache_creation_tokens: usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        stop_reason: message.get("stop_reason").and_then(|v| v.as_str()).map(str::to_string),
+        timestamp: value.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
+        session_id,
+    })
+}
+
+/// 判断新条目是否应替换已有条目（stop_reason 优先，其次 output_tokens 更大）
+fn should_replace(existing: &ParsedAssistantUsage, new: &ParsedAssistantUsage) -> bool {
+    if new.stop_reason.is_some() && existing.stop_reason.is_none() {
+        true
+    } else if new.stop_reason.is_some() == existing.stop_reason.is_some() {
+        new.output_tokens > existing.output_tokens
+    } else {
+        false
+    }
+}
+
 fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let file_path_str = file_path.to_string_lossy().to_string();
     let metadata = fs::metadata(file_path).context("无法读取文件元数据")?;
@@ -115,6 +147,7 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let mut line_offset: i64 = 0;
     let mut messages: HashMap<String, ParsedAssistantUsage> = HashMap::new();
     let mut current_session_id: Option<String> = None;
+    let mut bad_lines: u32 = 0;
 
     for line_result in reader.lines() {
         line_offset += 1;
@@ -123,14 +156,20 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         }
         let line = match line_result {
             Ok(l) => l,
-            Err(_) => continue,
+            Err(_) => {
+                bad_lines += 1;
+                continue;
+            }
         };
         if line.trim().is_empty() {
             continue;
         }
         let value: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(_) => {
+                bad_lines += 1;
+                continue;
+            }
         };
         if current_session_id.is_none() {
             if let Some(sid) = value.get("sessionId").and_then(|v| v.as_str()) {
@@ -140,41 +179,20 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
             continue;
         }
-        let Some(message) = value.get("message") else { continue };
-        let Some(msg_id) = message.get("id").and_then(|v| v.as_str()).map(str::to_string) else { continue };
-        let Some(usage) = message.get("usage") else { continue };
-
-        let parsed = ParsedAssistantUsage {
-            message_id: msg_id.clone(),
-            model: message.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-            input_tokens: usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            output_tokens: usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            cache_read_tokens: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            cache_creation_tokens: usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            stop_reason: message.get("stop_reason").and_then(|v| v.as_str()).map(str::to_string),
-            timestamp: value.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
-            session_id: current_session_id.clone(),
+        let Some(parsed) = parse_assistant_line(&value, current_session_id.clone()) else {
+            bad_lines += 1;
+            continue;
         };
+        let msg_id = parsed.message_id.clone();
 
-        let should_replace = match messages.get(&msg_id) {
-            None => true,
-            Some(existing) => {
-                if parsed.stop_reason.is_some() && existing.stop_reason.is_none() {
-                    true
-                } else if parsed.stop_reason.is_some() == existing.stop_reason.is_some() {
-                    parsed.output_tokens > existing.output_tokens
-                } else {
-                    false
-                }
-            }
-        };
-        if should_replace {
+        if messages.get(&msg_id).is_none_or(|existing| should_replace(existing, &parsed)) {
             messages.insert(msg_id, parsed);
         }
     }
 
     let mut imported = 0u32;
-    let mut skipped = 0u32;
+    let mut skipped = bad_lines;
+    let mut insert_failed = false;
 
     for msg in messages.values() {
         let has_billable = msg.input_tokens > 0 || msg.output_tokens > 0
@@ -188,10 +206,15 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
             Err(e) => {
+                insert_failed = true;
                 eprintln!("[CLAUDE-SYNC] 插入失败 ({}): {e:#}", msg.message_id);
                 skipped += 1;
             }
         }
+    }
+
+    if insert_failed {
+        return Err(anyhow::anyhow!("Claude 会话文件部分插入失败: {}", file_path.display()));
     }
 
     update_sync_state(db, &file_path_str, file_modified, line_offset)?;
@@ -275,5 +298,58 @@ mod tests {
         assert_eq!(usage.get("input_tokens").unwrap().as_u64().unwrap(), 100);
         assert_eq!(usage.get("cache_read_input_tokens").unwrap().as_u64().unwrap(), 10);
         assert_eq!(value.get("sessionId").unwrap().as_str().unwrap(), "sess-1");
+    }
+
+    #[test]
+    fn test_parse_assistant_line_extracts_fields() {
+        let line = r#"{"type":"assistant","sessionId":"sess-1","timestamp":"2026-01-01T00:00:00Z","message":{"id":"msg-1","model":"claude-sonnet-4","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"stop_reason":"end_turn"}}"#;
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        let parsed = parse_assistant_line(&value, Some("sess-1".to_string())).unwrap();
+        assert_eq!(parsed.message_id, "msg-1");
+        assert_eq!(parsed.model, "claude-sonnet-4");
+        assert_eq!(parsed.input_tokens, 100);
+        assert_eq!(parsed.output_tokens, 50);
+        assert_eq!(parsed.cache_read_tokens, 10);
+        assert_eq!(parsed.cache_creation_tokens, 5);
+        assert_eq!(parsed.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(parsed.session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn test_parse_assistant_line_skips_non_assistant() {
+        let line = r#"{"type":"user","sessionId":"sess-1","message":{"id":"msg-2","content":"hi"}}"#;
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(parse_assistant_line(&value, None).is_none());
+    }
+
+    #[test]
+    fn test_dedup_prefers_stop_reason() {
+        let existing = ParsedAssistantUsage {
+            message_id: "msg-1".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            input_tokens: 100,
+            output_tokens: 500,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            stop_reason: None,
+            timestamp: None,
+            session_id: None,
+        };
+        let with_stop_reason = ParsedAssistantUsage {
+            output_tokens: 50,
+            stop_reason: Some("end_turn".to_string()),
+            ..ParsedAssistantUsage {
+                message_id: "msg-1".to_string(),
+                model: "claude-sonnet-4".to_string(),
+                input_tokens: 100,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                stop_reason: None,
+                timestamp: None,
+                session_id: None,
+            }
+        };
+        assert!(should_replace(&existing, &with_stop_reason));
     }
 }
