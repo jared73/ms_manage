@@ -1,12 +1,11 @@
 //! SQL 片段辅助：把存储的 input_tokens 归一化为 fresh input 语义。
 //! codex/gemini/grokbuild 的 input 含 cache，需扣除；opencode/claude 不含，原样保留。
 
+use crate::usage::pricing::CACHE_INCLUSIVE_APP_TYPES;
+
 pub const INPUT_TOKEN_SEMANTICS_LEGACY: i64 = 0;
 pub const INPUT_TOKEN_SEMANTICS_TOTAL: i64 = 1;
 pub const INPUT_TOKEN_SEMANTICS_FRESH: i64 = 2;
-
-/// 存储 input_tokens 已含 cache_read_tokens 的 app：LEGACY 行只对这些扣减。
-pub const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild"];
 
 /// 构建 SQL 表达式：返回单行归一化后的 fresh input tokens。
 /// alias 传 "" 表示无前缀列名，传 "l" 等表别名生成 l.input_tokens 形式。

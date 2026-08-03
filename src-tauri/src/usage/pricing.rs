@@ -77,9 +77,12 @@ pub fn calculate_cost(
     c
 }
 
+/// input_tokens 已含 cache read/write 的 app（单一语义源，写入侧/聚合侧共用）
+pub const CACHE_INCLUSIVE_APP_TYPES: &[&str] = &["codex", "gemini", "grokbuild"];
+
 /// app_type 的 input_tokens 是否包含 cache read（true: codex/gemini/grokbuild; false: opencode/claude）
 pub fn input_includes_cache_read(app_type: &str) -> bool {
-    matches!(app_type, "codex" | "gemini" | "grokbuild")
+    CACHE_INCLUSIVE_APP_TYPES.contains(&app_type)
 }
 
 /// 从 usage.db 查询模型定价；未找到则从内置 seed 表加载并尝试落库。
