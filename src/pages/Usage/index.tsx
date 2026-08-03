@@ -12,14 +12,20 @@ import { DataSourcesPanel } from "./DataSourcesPanel";
 import { PricingPanel } from "./PricingPanel";
 
 const RANGES = [
+  { key: "today", days: 0 },
   { key: "7d", days: 7 },
   { key: "30d", days: 30 },
   { key: "90d", days: 90 },
-  { key: "all", days: 0 },
+  { key: "all", days: -1 },
 ] as const;
 
 function rangeToEpoch(days: number): number | undefined {
-  if (days === 0) return undefined;
+  if (days === -1) return undefined;
+  if (days === 0) {
+    // 当天：今天本地时区 0 点
+    const now = new Date();
+    return Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
+  }
   return Math.floor(Date.now() / 1000) - days * 86400;
 }
 

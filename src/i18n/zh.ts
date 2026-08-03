@@ -593,7 +593,7 @@ export default {
     data_sources: "数据源",
     sync_now: "立即同步",
     sync_done: "同步完成: 导入 {{imported}} 条, 跳过 {{skipped}} 条",
-    range: { "7d": "近 7 天", "30d": "近 30 天", "90d": "近 90 天", all: "全部" },
+    range: { today: "当天", "7d": "近 7 天", "30d": "近 30 天", "90d": "近 90 天", all: "全部" },
     request_logs: "请求明细",
     time: "时间",
     app: "应用",
