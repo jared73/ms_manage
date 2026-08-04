@@ -3,7 +3,6 @@ use crate::storage::StoredSettings;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
-use tauri_plugin_autostart::ManagerExt;
 
 /// Wire-side AppSettings:送给前端的形态。
 ///
@@ -146,34 +145,28 @@ pub fn update_settings(
 }
 
 #[tauri::command]
-pub fn is_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+pub fn is_autostart_enabled() -> Result<bool, String> {
+    Ok(crate::autostart::is_enabled())
 }
 
 #[tauri::command]
-pub fn enable_autostart(app: tauri::AppHandle) -> Result<(), String> {
-    app.autolaunch().enable().map_err(|e| e.to_string())?;
-    // 兜底：把 Run 键里的 exe 纠正为 release 构建 + 清掉旧 Startup 快捷方式
-    crate::autostart::fix_registry_target();
-    crate::autostart::remove_legacy_shortcut();
-    Ok(())
+pub fn enable_autostart() -> Result<(), String> {
+    crate::autostart::enable()
 }
 
 #[tauri::command]
-pub fn disable_autostart(app: tauri::AppHandle) -> Result<(), String> {
-    app.autolaunch().disable().map_err(|e| e.to_string())?;
-    crate::autostart::remove_legacy_shortcut();
-    Ok(())
+pub fn disable_autostart() -> Result<(), String> {
+    crate::autostart::disable()
 }
 
 #[tauri::command]
-pub fn get_auto_launch(app: tauri::AppHandle) -> Result<bool, String> {
-    is_autostart_enabled(app)
+pub fn get_auto_launch() -> Result<bool, String> {
+    Ok(crate::autostart::is_enabled())
 }
 
 #[tauri::command]
-pub fn set_auto_launch(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
-    if enabled { enable_autostart(app) } else { disable_autostart(app) }
+pub fn set_auto_launch(enabled: bool) -> Result<(), String> {
+    if enabled { crate::autostart::enable() } else { crate::autostart::disable() }
 }
 
 /// 重新生成 MCPR_TOKEN(用户想要换 token 的时候用)。
