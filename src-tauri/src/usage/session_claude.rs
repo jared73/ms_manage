@@ -1,7 +1,7 @@
 use crate::usage::paths::UsagePaths;
 use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
@@ -195,24 +195,27 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let mut skipped = bad_lines;
     let mut insert_failed = false;
 
-    for msg in messages.values() {
-        let has_billable = msg.input_tokens > 0 || msg.output_tokens > 0
-            || msg.cache_read_tokens > 0 || msg.cache_creation_tokens > 0;
-        if !has_billable {
-            continue;
-        }
-        let request_id = format!("claude_session:{}", msg.message_id);
+    with_transaction(db, |conn| {
+        for msg in messages.values() {
+            let has_billable = msg.input_tokens > 0 || msg.output_tokens > 0
+                || msg.cache_read_tokens > 0 || msg.cache_creation_tokens > 0;
+            if !has_billable {
+                continue;
+            }
+            let request_id = format!("claude_session:{}", msg.message_id);
 
-        match insert_claude_entry(db, &request_id, msg) {
-            Ok(true) => imported += 1,
-            Ok(false) => skipped += 1,
-            Err(e) => {
-                insert_failed = true;
-                eprintln!("[CLAUDE-SYNC] 插入失败 ({}): {e:#}", msg.message_id);
-                skipped += 1;
+            match insert_claude_entry(conn, &request_id, msg) {
+                Ok(true) => imported += 1,
+                Ok(false) => skipped += 1,
+                Err(e) => {
+                    insert_failed = true;
+                    eprintln!("[CLAUDE-SYNC] 插入失败 ({}): {e:#}", msg.message_id);
+                    skipped += 1;
+                }
             }
         }
-    }
+        Ok(())
+    })?;
 
     if insert_failed {
         return Err(anyhow::anyhow!("Claude 会话文件部分插入失败: {}", file_path.display()));
@@ -222,8 +225,7 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     Ok((imported, skipped))
 }
 
-fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsage) -> Result<bool> {
-    let conn = db.conn.lock();
+fn insert_claude_entry(conn: &rusqlite::Connection, request_id: &str, msg: &ParsedAssistantUsage) -> Result<bool> {
     let created_at = msg
         .timestamp
         .as_deref()
@@ -243,8 +245,8 @@ fn insert_claude_entry(db: &UsageDb, request_id: &str, msg: &ParsedAssistantUsag
         cache_creation_tokens: msg.cache_creation_tokens,
         model: Some(msg.model.clone()),
     };
-    let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "claude");
-    let (costs, total) = match find_model_pricing(&conn, &msg.model) {
+    let multiplier = crate::usage::pricing::get_app_multiplier(conn, "claude");
+    let (costs, total) = match find_model_pricing(conn, &msg.model) {
         Some(pricing) => {
             let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("claude"), multiplier);
             let t = c.total_cost.to_string();

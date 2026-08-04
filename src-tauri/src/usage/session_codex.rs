@@ -1,7 +1,7 @@
 use crate::usage::paths::UsagePaths;
 use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
@@ -109,81 +109,82 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         .unwrap_or("unknown")
         .to_string();
 
-    for line_result in reader.lines() {
-        line_offset += 1;
-        let Ok(line) = line_result else { continue };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-        let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
-            continue;
-        };
-
-        if event_type == "turn_context" {
-            if let Some(model) = model_from_turn_context(&value) {
-                current_model = model;
+    with_transaction(db, |conn| {
+        for line_result in reader.lines() {
+            line_offset += 1;
+            let Ok(line) = line_result else { continue };
+            if line.trim().is_empty() {
+                continue;
             }
-            continue;
-        }
-        if event_type != "event_msg" || !line.contains("token_count") {
-            continue;
-        }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+            let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
+                continue;
+            };
 
-        let Some((delta, model, created_at)) =
-            parse_token_line(&value, &current_model, &mut prev_total)
-        else {
-            continue;
-        };
-        if delta.is_zero() {
-            continue;
-        }
-
-        event_index += 1;
-        let request_id = format!("codex_session:{session_id}:{event_index}");
-
-        let usage = TokenUsage {
-            input_tokens: delta.input,
-            output_tokens: delta.output,
-            cache_read_tokens: delta.cached_input,
-            cache_creation_tokens: 0,
-            model: Some(model.clone()),
-        };
-        let conn = db.conn.lock();
-        let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "codex");
-        let (costs, total) = match find_model_pricing(&conn, &model) {
-            Some(pricing) => {
-                let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("codex"), multiplier);
-                let t = c.total_cost.to_string();
-                (c, t)
+            if event_type == "turn_context" {
+                if let Some(model) = model_from_turn_context(&value) {
+                    current_model = model;
+                }
+                continue;
             }
-            None => (Default::default(), "0".to_string()),
-        };
-        drop(conn);
+            if event_type != "event_msg" || !line.contains("token_count") {
+                continue;
+            }
 
-        // insert_request_log 失败时直接 ? 传播错误，保证同步进度不会推进到失败行
-        let inserted = crate::usage::session_common::insert_request_log(
-            db,
-            &request_id,
-            "codex",
-            &model,
-            delta.input,
-            delta.output,
-            delta.cached_input,
-            0,
-            &costs,
-            &total,
-            &multiplier.to_string(),
-            Some(&session_id),
-            created_at,
-            crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-        )?;
-        if inserted {
-            imported += 1;
-        } else {
-            skipped += 1;
+            let Some((delta, model, created_at)) =
+                parse_token_line(&value, &current_model, &mut prev_total)
+            else {
+                continue;
+            };
+            if delta.is_zero() {
+                continue;
+            }
+
+            event_index += 1;
+            let request_id = format!("codex_session:{session_id}:{event_index}");
+
+            let usage = TokenUsage {
+                input_tokens: delta.input,
+                output_tokens: delta.output,
+                cache_read_tokens: delta.cached_input,
+                cache_creation_tokens: 0,
+                model: Some(model.clone()),
+            };
+            let multiplier = crate::usage::pricing::get_app_multiplier(conn, "codex");
+            let (costs, total) = match find_model_pricing(conn, &model) {
+                Some(pricing) => {
+                    let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("codex"), multiplier);
+                    let t = c.total_cost.to_string();
+                    (c, t)
+                }
+                None => (Default::default(), "0".to_string()),
+            };
+
+            // insert_request_log 失败时直接 ? 传播错误 → 整个文件事务回滚，进度不推进
+            let inserted = crate::usage::session_common::insert_request_log(
+                conn,
+                &request_id,
+                "codex",
+                &model,
+                delta.input,
+                delta.output,
+                delta.cached_input,
+                0,
+                &costs,
+                &total,
+                &multiplier.to_string(),
+                Some(&session_id),
+                created_at,
+                crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
+            )?;
+            if inserted {
+                imported += 1;
+            } else {
+                skipped += 1;
+            }
         }
-    }
+        Ok(())
+    })?;
 
     update_sync_state(db, &file_path_str, file_modified, line_offset)?;
     Ok((imported, skipped))

@@ -1,7 +1,7 @@
 use crate::usage::paths::UsagePaths;
 use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
@@ -85,61 +85,64 @@ pub fn sync_opencode_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSy
             .query_map([session_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .context("查询消息失败")?;
 
-        for row in rows {
-            let (message_id, data_json) = match row {
-                Ok(r) => r,
-                Err(_) => {
-                    session_had_error = true;
+        with_transaction(db, |conn| {
+            for row in rows {
+                let (message_id, data_json) = match row {
+                    Ok(r) => r,
+                    Err(_) => {
+                        session_had_error = true;
+                        continue;
+                    }
+                };
+                let value: serde_json::Value = match serde_json::from_str(&data_json) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let m = format!("OpenCode 消息解析失败 {session_id}:{message_id}");
+                        result.errors.push(m);
+                        result.skipped += 1;
+                        session_had_error = true;
+                        continue;
+                    }
+                };
+
+                if value.get("role").and_then(|r| r.as_str()) != Some("assistant") {
                     continue;
                 }
-            };
-            let value: serde_json::Value = match serde_json::from_str(&data_json) {
-                Ok(v) => v,
-                Err(_) => {
-                    let m = format!("OpenCode 消息解析失败 {session_id}:{message_id}");
-                    result.errors.push(m);
-                    result.skipped += 1;
-                    session_had_error = true;
+                if value.get("tokens").is_none() {
                     continue;
                 }
-            };
-
-            if value.get("role").and_then(|r| r.as_str()) != Some("assistant") {
-                continue;
-            }
-            if value.get("tokens").is_none() {
-                continue;
-            }
-            // 跳过未完成消息；超过容忍窗口的视为已终止会话，不阻塞水位线
-            if value.get("time").and_then(|t| t.get("completed")).is_none() {
-                let created_ms = value
-                    .get("time")
-                    .and_then(|t| t.get("created"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                if created_ms > 0 && now - created_ms / 1000 > INCOMPLETE_TOLERANCE_SECS {
-                    result.skipped += 1;
+                // 跳过未完成消息；超过容忍窗口的视为已终止会话，不阻塞水位线
+                if value.get("time").and_then(|t| t.get("completed")).is_none() {
+                    let created_ms = value
+                        .get("time")
+                        .and_then(|t| t.get("created"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    if created_ms > 0 && now - created_ms / 1000 > INCOMPLETE_TOLERANCE_SECS {
+                        result.skipped += 1;
+                        continue;
+                    }
+                    session_has_incomplete = true;
                     continue;
                 }
-                session_has_incomplete = true;
-                continue;
-            }
 
-            let Some(msg) = parse_message_data(&value) else { continue };
+                let Some(msg) = parse_message_data(&value) else { continue };
 
-            let request_id = format!("opencode_session:{session_id}:{message_id}");
-            match insert_opencode_message(db, &request_id, &msg) {
-                Ok(true) => result.imported += 1,
-                Ok(false) => result.skipped += 1,
-                Err(e) => {
-                    let m = format!("OpenCode 消息插入失败 {request_id}: {e:#}");
-                    eprintln!("[OPENCODE-SYNC] {m}");
-                    result.errors.push(m);
-                    result.skipped += 1;
-                    session_had_error = true;
+                let request_id = format!("opencode_session:{session_id}:{message_id}");
+                match insert_opencode_message(conn, &request_id, &msg) {
+                    Ok(true) => result.imported += 1,
+                    Ok(false) => result.skipped += 1,
+                    Err(e) => {
+                        let m = format!("OpenCode 消息插入失败 {request_id}: {e:#}");
+                        eprintln!("[OPENCODE-SYNC] {m}");
+                        result.errors.push(m);
+                        result.skipped += 1;
+                        session_had_error = true;
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
 
         if session_had_error {
             has_sync_errors = true;
@@ -209,11 +212,10 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
 }
 
 fn insert_opencode_message(
-    db: &UsageDb,
+    conn: &rusqlite::Connection,
     request_id: &str,
     msg: &OpenCodeMessageData,
 ) -> Result<bool> {
-    let conn = db.conn.lock();
     let created_at = if msg.timestamp_ms > 0 {
         msg.timestamp_ms / 1000
     } else {
@@ -224,7 +226,7 @@ fn insert_opencode_message(
     let output_with_reasoning = msg.output_tokens + msg.reasoning_tokens;
     let app_type = "opencode";
     let model_id = &msg.model_id;
-    let multiplier = crate::usage::pricing::get_app_multiplier(&conn, app_type);
+    let multiplier = crate::usage::pricing::get_app_multiplier(conn, app_type);
 
     // 优先用 opencode 自带的 cost，否则定价表估算
     let (costs, total_cost) = if msg.cost > 0.0 {
@@ -249,7 +251,7 @@ fn insert_opencode_message(
             cache_creation_tokens: msg.cache_write_tokens,
             model: Some(model_id.clone()),
         };
-        match find_model_pricing(&conn, model_id) {
+        match find_model_pricing(conn, model_id) {
             Some(pricing) => {
                 let c = crate::usage::pricing::calculate_cost(
                     &usage,

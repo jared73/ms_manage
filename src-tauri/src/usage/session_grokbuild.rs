@@ -4,7 +4,7 @@ use crate::usage::pricing::{
     TokenUsage,
 };
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
@@ -85,75 +85,76 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
     let mut result = SessionSyncResult::default();
     let mut deferred = false;
 
-    for (idx, event) in events.iter().enumerate() {
-        if now.saturating_sub(event.created_at) < SETTLE_WINDOW_SECONDS {
-            deferred = true;
-            break;
-        }
-
-        for (model, turn) in &event.per_model {
-            if turn.input == 0 && turn.output == 0 && turn.cached == 0 {
-                continue;
+    with_transaction(db, |conn| {
+        for (idx, event) in events.iter().enumerate() {
+            if now.saturating_sub(event.created_at) < SETTLE_WINDOW_SECONDS {
+                deferred = true;
+                break;
             }
-            let turn_key = if event.prompt_id.is_empty() {
-                format!("idx{idx}")
-            } else {
-                event.prompt_id.clone()
-            };
-            let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
 
-            // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
-            // 本地定价的取舍见 compute_costs 注释。用 per-model 的 cost_ticks
-            // 而非事件级求和，避免多模型 turn 的整单成本被每行重复计一次
-            let reported = if turn.cost_ticks > 0 {
-                Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64)
-            } else {
-                Decimal::ZERO
-            };
+            for (model, turn) in &event.per_model {
+                if turn.input == 0 && turn.output == 0 && turn.cached == 0 {
+                    continue;
+                }
+                let turn_key = if event.prompt_id.is_empty() {
+                    format!("idx{idx}")
+                } else {
+                    event.prompt_id.clone()
+                };
+                let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
 
-            let usage = TokenUsage {
-                input_tokens: turn.input,
-                output_tokens: turn.output,
-                cache_read_tokens: turn.cached,
-                cache_creation_tokens: 0,
-                model: Some(model.clone()),
-            };
-            let conn = db.conn.lock();
-            let pricing = find_model_pricing(&conn, model);
-            let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "grokbuild");
-            drop(conn);
-            // 顶层 costIsPartial 覆盖整事件；per-model 标记再单独兜底该行
-            let (costs, total) = compute_costs(
-                pricing.as_ref(),
-                &usage,
-                reported,
-                event.cost_partial || turn.cost_partial,
-                multiplier,
-            );
+                // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
+                // 本地定价的取舍见 compute_costs 注释。用 per-model 的 cost_ticks
+                // 而非事件级求和，避免多模型 turn 的整单成本被每行重复计一次
+                let reported = if turn.cost_ticks > 0 {
+                    Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64)
+                } else {
+                    Decimal::ZERO
+                };
 
-            let inserted = crate::usage::session_common::insert_request_log(
-                db,
-                &request_id,
-                "grokbuild",
-                model,
-                turn.input,
-                turn.output,
-                turn.cached,
-                0,
-                &costs,
-                &total,
-                &multiplier.to_string(),
-                Some(&session_id),
-                event.created_at,
-                crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-            )?;
-            if inserted {
-                result.imported += 1;
-            } else {
-                result.skipped += 1;
+                let usage = TokenUsage {
+                    input_tokens: turn.input,
+                    output_tokens: turn.output,
+                    cache_read_tokens: turn.cached,
+                    cache_creation_tokens: 0,
+                    model: Some(model.clone()),
+                };
+                let pricing = find_model_pricing(conn, model);
+                let multiplier = crate::usage::pricing::get_app_multiplier(conn, "grokbuild");
+                // 顶层 costIsPartial 覆盖整事件；per-model 标记再单独兜底该行
+                let (costs, total) = compute_costs(
+                    pricing.as_ref(),
+                    &usage,
+                    reported,
+                    event.cost_partial || turn.cost_partial,
+                    multiplier,
+                );
+
+                let inserted = crate::usage::session_common::insert_request_log(
+                    conn,
+                    &request_id,
+                    "grokbuild",
+                    model,
+                    turn.input,
+                    turn.output,
+                    turn.cached,
+                    0,
+                    &costs,
+                    &total,
+                    &multiplier.to_string(),
+                    Some(&session_id),
+                    event.created_at,
+                    crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
+                )?;
+                if inserted {
+                    result.imported += 1;
+                } else {
+                    result.skipped += 1;
+                }
             }
         }
-    }
+        Ok(())
+    })?;
 
     if deferred {
         result.deferred_files += 1;

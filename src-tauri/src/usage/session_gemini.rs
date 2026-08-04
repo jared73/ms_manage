@@ -1,7 +1,7 @@
 use crate::usage::paths::UsagePaths;
 use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
@@ -79,66 +79,67 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
     let mut imported = 0u32;
     let mut skipped = 0u32;
 
-    for msg in messages {
-        let Some(data) = parse_gemini_message(msg) else { continue };
+    with_transaction(db, |conn| {
+        for msg in messages {
+            let Some(data) = parse_gemini_message(msg) else { continue };
 
-        // 时间戳缺失/无法解析时回退为当前时间
-        let created_at = if data.created_at == 0 {
-            std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        } else {
-            data.created_at
-        };
+            // 时间戳缺失/无法解析时回退为当前时间
+            let created_at = if data.created_at == 0 {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            } else {
+                data.created_at
+            };
 
-        let request_id = format!(
-            "gemini_session:{}:{}",
-            session_id.as_deref().unwrap_or("unknown"),
-            data.message_id
-        );
+            let request_id = format!(
+                "gemini_session:{}:{}",
+                session_id.as_deref().unwrap_or("unknown"),
+                data.message_id
+            );
 
-        let usage = TokenUsage {
-            input_tokens: data.input,
-            output_tokens: data.output,
-            cache_read_tokens: data.cached,
-            cache_creation_tokens: 0,
-            model: Some(data.model.clone()),
-        };
-        let conn = db.conn.lock();
-        let multiplier = crate::usage::pricing::get_app_multiplier(&conn, "gemini");
-        let (costs, total) = match find_model_pricing(&conn, &data.model) {
-            Some(pricing) => {
-                let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("gemini"), multiplier);
-                let t = c.total_cost.to_string();
-                (c, t)
+            let usage = TokenUsage {
+                input_tokens: data.input,
+                output_tokens: data.output,
+                cache_read_tokens: data.cached,
+                cache_creation_tokens: 0,
+                model: Some(data.model.clone()),
+            };
+            let multiplier = crate::usage::pricing::get_app_multiplier(conn, "gemini");
+            let (costs, total) = match find_model_pricing(conn, &data.model) {
+                Some(pricing) => {
+                    let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("gemini"), multiplier);
+                    let t = c.total_cost.to_string();
+                    (c, t)
+                }
+                None => (Default::default(), "0".to_string()),
+            };
+
+            let inserted = crate::usage::session_common::insert_request_log(
+                conn,
+                &request_id,
+                "gemini",
+                &data.model,
+                data.input,
+                data.output,
+                data.cached,
+                0,
+                &costs,
+                &total,
+                &multiplier.to_string(),
+                session_id.as_deref(),
+                created_at,
+                crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
+            )?;
+            if inserted {
+                imported += 1;
+            } else {
+                skipped += 1;
             }
-            None => (Default::default(), "0".to_string()),
-        };
-        drop(conn);
-
-        let inserted = crate::usage::session_common::insert_request_log(
-            db,
-            &request_id,
-            "gemini",
-            &data.model,
-            data.input,
-            data.output,
-            data.cached,
-            0,
-            &costs,
-            &total,
-            &multiplier.to_string(),
-            session_id.as_deref(),
-            created_at,
-            crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-        )?;
-        if inserted {
-            imported += 1;
-        } else {
-            skipped += 1;
         }
-    }
+        Ok(())
+    })?;
 
     update_sync_state(db, &file_path_str, file_modified, messages.len() as i64)?;
     Ok((imported, skipped))

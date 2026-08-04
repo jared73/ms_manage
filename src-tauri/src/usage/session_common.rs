@@ -1,5 +1,6 @@
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
+use rusqlite::OptionalExtension;
 use std::time::SystemTime;
 
 /// 一次同步的结果汇总
@@ -25,15 +26,40 @@ impl SessionSyncResult {
     }
 }
 
-/// 读取 session_log_sync 中的同步进度，返回 (last_modified, last_line_offset)
+/// 读取 session_log_sync 中的同步进度，返回 (last_modified, last_line_offset)。
+/// 无记录返回 (0, 0)；数据库出错返回 Err（避免把真实 DB 故障误当成「尚未同步」而全量重扫）。
 pub fn get_sync_state(db: &UsageDb, file_path: &str) -> Result<(i64, i64)> {
     let conn = db.conn.lock();
-    let result = conn.query_row(
-        "SELECT last_modified, last_line_offset FROM session_log_sync WHERE file_path = ?1",
-        [file_path],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-    );
+    let result = conn
+        .query_row(
+            "SELECT last_modified, last_line_offset FROM session_log_sync WHERE file_path = ?1",
+            [file_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .context("查询同步状态失败")?;
     Ok(result.unwrap_or((0, 0)))
+}
+
+/// 在事务中执行闭包；成功提交，失败回滚。
+/// 闭包内不得再调用任何会锁 `db.conn` 的函数（如 get_sync_state / update_sync_state），
+/// 否则 parking_lot::Mutex 不可重入会死锁。
+pub fn with_transaction<T>(
+    db: &UsageDb,
+    f: impl FnOnce(&rusqlite::Connection) -> Result<T, anyhow::Error>,
+) -> Result<T> {
+    let conn = db.conn.lock();
+    conn.execute_batch("BEGIN")?;
+    match f(&conn) {
+        Ok(v) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 /// 文件 mtime 的纳秒时间戳
@@ -68,8 +94,9 @@ pub fn update_sync_state(db: &UsageDb, file_path: &str, last_modified: i64, line
 
 /// 插入一条请求日志。request_id 冲突时跳过（INSERT OR IGNORE）。
 /// 返回 true = 新插入，false = 已存在跳过。
+/// conn 由调用方持有（通常在 with_transaction 事务内）。
 pub fn insert_request_log(
-    db: &UsageDb,
+    conn: &rusqlite::Connection,
     request_id: &str,
     app_type: &str,
     model: &str,
@@ -84,7 +111,6 @@ pub fn insert_request_log(
     created_at: i64,
     input_token_semantics: i64,
 ) -> Result<bool> {
-    let conn = db.conn.lock();
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO request_logs (
             request_id, provider_id, app_type, model, request_model,
