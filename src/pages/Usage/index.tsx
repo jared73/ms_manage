@@ -41,7 +41,7 @@ function rangeToEpoch(days: number): number | undefined {
 
 export function Usage() {
   const { t } = useTranslation();
-  const [rangeKey, setRangeKey] = useState<(typeof RANGES)[number]["key"]>("30d");
+  const [rangeKey, setRangeKey] = useState<(typeof RANGES)[number]["key"]>("today");
   const [tab, setTab] = useState<TabKey>("logs");
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [trends, setTrends] = useState<DailyStats[]>([]);
