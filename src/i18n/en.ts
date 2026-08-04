@@ -534,6 +534,7 @@ export default {
     output_tokens: "Output Tokens",
     prev: "Previous",
     next: "Next",
+    no_logs: "No request logs yet",
     model_pricing: "Model Pricing",
     input_price: "Input ($/M)",
     output_price: "Output ($/M)",

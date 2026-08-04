@@ -613,6 +613,7 @@ export default {
     output_tokens: "输出 Token",
     prev: "上一页",
     next: "下一页",
+    no_logs: "暂无请求记录",
     model_pricing: "模型定价",
     input_price: "输入价(每百万)",
     output_price: "输出价(每百万)",

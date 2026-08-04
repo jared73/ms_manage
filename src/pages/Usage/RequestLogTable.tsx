@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getRequestLogs, type PaginatedLogs } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import { toast } from "sonner";
+import { EmptyHint } from "@/components/Section";
 
 export function RequestLogTable({ startDate }: { startDate?: number }) {
   const { t } = useTranslation();
@@ -41,32 +42,36 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
 
   return (
     <div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-border text-left text-2xs text-fg-muted">
-            <th className="py-2 pr-3">{t("usage.time")}</th>
-            <th className="py-2 pr-3">{t("usage.app")}</th>
-            <th className="py-2 pr-3">{t("usage.model")}</th>
-            <th className="py-2 pr-3 text-right">{t("usage.input_tokens")}</th>
-            <th className="py-2 pr-3 text-right">{t("usage.output_tokens")}</th>
-            <th className="py-2 text-right">{t("usage.total_cost")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data?.rows.map((r) => (
-            <tr key={r.requestId} className="border-b border-border">
-              <td className="py-1.5 pr-3 text-xs text-fg-muted">
-                {new Date(r.createdAt * 1000).toLocaleString()}
-              </td>
-              <td className="py-1.5 pr-3 text-xs">{r.appType}</td>
-              <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
-              <td className="py-1.5 pr-3 text-right text-xs">{r.inputTokens.toLocaleString()}</td>
-              <td className="py-1.5 pr-3 text-right text-xs">{r.outputTokens.toLocaleString()}</td>
-              <td className="py-1.5 text-right text-xs">${Number(r.totalCostUsd).toFixed(4)}</td>
+      {!data || data.rows.length === 0 ? (
+        <EmptyHint>{t("usage.no_logs")}</EmptyHint>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-2xs text-fg-muted">
+              <th className="py-2 pr-3">{t("usage.time")}</th>
+              <th className="py-2 pr-3">{t("usage.app")}</th>
+              <th className="py-2 pr-3">{t("usage.model")}</th>
+              <th className="py-2 pr-3 text-right">{t("usage.input_tokens")}</th>
+              <th className="py-2 pr-3 text-right">{t("usage.output_tokens")}</th>
+              <th className="py-2 text-right">{t("usage.total_cost")}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data?.rows.map((r) => (
+              <tr key={r.requestId} className="border-b border-border">
+                <td className="py-1.5 pr-3 text-xs text-fg-muted">
+                  {new Date(r.createdAt * 1000).toLocaleString()}
+                </td>
+                <td className="py-1.5 pr-3 text-xs">{r.appType}</td>
+                <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
+                <td className="py-1.5 pr-3 text-right text-xs">{r.inputTokens.toLocaleString()}</td>
+                <td className="py-1.5 pr-3 text-right text-xs">{r.outputTokens.toLocaleString()}</td>
+                <td className="py-1.5 text-right text-xs">${Number(r.totalCostUsd).toFixed(4)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {data && data.total > 0 && (
         <div className="mt-3 flex items-center justify-end gap-2 text-xs">
           <button
