@@ -305,13 +305,6 @@ export interface UsageSummary {
   cacheHitRate: number;
 }
 
-export interface UsageSummaryByApp {
-  appType: string;
-  requestCount: number;
-  totalCost: string;
-  totalTokens: number;
-}
-
 export interface DailyStats {
   date: string;
   requestCount: number;
@@ -371,8 +364,6 @@ export const getUsageSummary = (
   endDate?: number,
   appType?: string,
 ) => invoke<UsageSummary>("get_usage_summary", { startDate, endDate, appType });
-export const getUsageSummaryByApp = (startDate?: number, endDate?: number) =>
-  invoke<UsageSummaryByApp[]>("get_usage_summary_by_app", { startDate, endDate });
 export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string) =>
   invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping });
 export const getModelStats = (startDate?: number, endDate?: number) =>

@@ -16,16 +16,6 @@ pub fn get_usage_summary(
 }
 
 #[tauri::command]
-pub fn get_usage_summary_by_app(
-    state: State<'_, Arc<AppState>>,
-    start_date: Option<i64>,
-    end_date: Option<i64>,
-) -> Result<Vec<crate::usage::stats::UsageSummaryByApp>, String> {
-    let db = state.usage_db.clone();
-    crate::usage::stats::get_usage_summary_by_app(&db, start_date, end_date).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn get_provider_stats(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
