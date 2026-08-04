@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -67,6 +67,8 @@ export function Settings() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsLoadError, setSettingsLoadError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  // 跟踪最新 settings，供卸载时兜底保存未提交的 override 输入
+  const overrideRef = useRef<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   // Token 重置双确认:用户首次点"重新生成"时弹窗说明影响 + 让用户输入当前的 token 末 4 位
   // (避免误点一刀斩断所有客户端的连接)
@@ -163,6 +165,17 @@ export function Settings() {
       cancelled = true;
     };
   }, [reloadTick, t]);
+
+  // 卸载兜底：override 输入只在 blur/Enter 时保存，若用户输入后直接切走/关窗，
+  // 最后一次输入可能没触发 onBlur，这里把 ref 里最新的未提交值补保存一次。
+  useEffect(() => {
+    return () => {
+      const pending = overrideRef.current;
+      if (pending) {
+        updateSettings(pending).catch(() => {});
+      }
+    };
+  }, []);
 
   const handleAutoLaunch = async (next: boolean) => {
     if (autoLaunchBusy) return;
@@ -320,8 +333,14 @@ export function Settings() {
                       ...settings,
                       usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: value },
                     });
+                    // 立即持久化到 ref，卸载时兜底保存
+                    overrideRef.current = {
+                      ...settings,
+                      usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: value },
+                    };
                   }}
                   onBlur={() => {
+                    overrideRef.current = settings;
                     updateSettings(settings).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
                   }}
                   onKeyDown={(e) => {
