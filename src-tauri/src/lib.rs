@@ -241,6 +241,7 @@ pub fn run() {
             proxy_endpoint::get_proxy_status,
             proxy_endpoint::get_router_config,
             cmd_usage::get_usage_summary,
+            cmd_usage::get_provider_stats,
             cmd_usage::get_usage_trends,
             cmd_usage::get_model_stats,
             cmd_usage::get_usage_data_sources,
