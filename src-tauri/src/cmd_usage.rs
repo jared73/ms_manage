@@ -108,7 +108,7 @@ pub fn get_model_pricing(
     let conn = db.conn.lock();
     let mut stmt = conn
         .prepare(
-            "SELECT model_id, input_cost_per_million, output_cost_per_million,
+            "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
                     cache_read_cost_per_million, cache_creation_cost_per_million
              FROM model_pricing ORDER BY model_id",
         )
@@ -117,10 +117,11 @@ pub fn get_model_pricing(
         .query_map([], |r| {
             Ok(serde_json::json!({
                 "modelId": r.get::<_, String>(0)?,
-                "inputCostPerMillion": r.get::<_, String>(1)?,
-                "outputCostPerMillion": r.get::<_, String>(2)?,
-                "cacheReadCostPerMillion": r.get::<_, String>(3)?,
-                "cacheCreationCostPerMillion": r.get::<_, String>(4)?,
+                "displayName": r.get::<_, String>(1)?,
+                "inputCostPerMillion": r.get::<_, String>(2)?,
+                "outputCostPerMillion": r.get::<_, String>(3)?,
+                "cacheReadCostPerMillion": r.get::<_, String>(4)?,
+                "cacheCreationCostPerMillion": r.get::<_, String>(5)?,
             }))
         })
         .map_err(|e| e.to_string())?;

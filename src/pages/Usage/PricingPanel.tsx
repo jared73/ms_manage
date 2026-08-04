@@ -154,7 +154,7 @@ export function PricingPanel() {
         <tbody>
           {items.map((p) => (
             <tr key={p.modelId} className="border-b border-border">
-              <td className="py-2 pr-3 font-mono text-xs">{p.modelId}</td>
+              <td className="py-2 pr-3 font-mono text-xs">{p.displayName || p.modelId}</td>
               <td className="py-2 pr-3 text-right text-xs">{p.inputCostPerMillion}</td>
               <td className="py-2 pr-3 text-right text-xs">{p.outputCostPerMillion}</td>
               <td className="py-2 pr-3 text-right text-xs">{p.cacheReadCostPerMillion}</td>
