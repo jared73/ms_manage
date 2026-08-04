@@ -95,11 +95,12 @@ export function Usage() {
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">{t("nav.usage")}</h1>
         <div className="flex items-center gap-3">
-          <div className="flex gap-1 rounded-lg border border-border p-0.5">
+          <div className="flex gap-1 rounded-lg border border-border p-0.5" role="group">
             {RANGES.map((r) => (
               <button
                 key={r.key}
                 onClick={() => setRangeKey(r.key)}
+                aria-pressed={rangeKey === r.key}
                 className={`rounded-md px-3 py-1 text-xs ${
                   rangeKey === r.key ? "bg-accent text-white" : "text-fg-muted hover:text-fg"
                 }`}
@@ -136,10 +137,12 @@ export function Usage() {
         <DataSourcesPanel onSynced={load} />
       </div>
 
-      <div className="flex gap-1 rounded-lg border border-border p-0.5 w-fit">
+      <div className="flex gap-1 rounded-lg border border-border p-0.5 w-fit" role="tablist">
         {TABS.map((tb) => (
           <button
             key={tb.key}
+            role="tab"
+            aria-selected={tab === tb.key}
             onClick={() => setTab(tb.key)}
             className={`rounded-md px-3 py-1 text-xs ${
               tab === tb.key ? "bg-accent text-white" : "text-fg-muted hover:text-fg"
@@ -161,15 +164,14 @@ export function Usage() {
           onClick={() => setPricingOpen((v) => !v)}
           className="flex w-full items-center justify-between px-4 py-3"
           aria-expanded={pricingOpen}
+          aria-controls="pricing-content"
         >
           <span className="text-sm font-semibold">{t("usage.model_pricing")}</span>
           <ChevronDown size={16} className={`text-fg-muted transition-transform ${pricingOpen ? "rotate-180" : ""}`} />
         </button>
-        {pricingOpen && (
-          <div className="border-t border-border p-4">
-            <PricingPanel />
-          </div>
-        )}
+        <div id="pricing-content" className={`border-t border-border p-4 ${pricingOpen ? "block" : "hidden"}`}>
+          <PricingPanel />
+        </div>
       </div>
     </div>
   );
