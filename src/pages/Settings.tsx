@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -11,15 +11,6 @@ import { getSettings, updateSettings, appInfo, openDataDir, regenerateToken, rev
 import type { AppSettings, DoctorItem } from "@/lib/ipc";
 import { useApp, previewTheme, readPersistedUi, type ThemeName } from "@/stores/app";
 import { describeError } from "@/lib/errors";
-
-/** 使用统计支持的数据源目录覆盖项（key 对应后端 UsagePaths.apply_overrides） */
-const USAGE_SOURCE_TOOLS = [
-  { key: "opencode", label: "OpenCode" },
-  { key: "claude", label: "Claude Code" },
-  { key: "codex", label: "Codex" },
-  { key: "gemini", label: "Gemini" },
-  { key: "grokbuild", label: "Grok Build" },
-] as const;
 
 /**
  * 读取某主题的 --accent / --bg CSS 变量并转成可直接给 style.background 用的 rgb() 字符串。
@@ -67,8 +58,6 @@ export function Settings() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsLoadError, setSettingsLoadError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
-  // 跟踪最新 settings，供卸载时兜底保存未提交的 override 输入
-  const overrideRef = useRef<AppSettings | null>(null);
   const [info, setInfo] = useState<{ version: string; data_dir: string } | null>(null);
   // Token 重置双确认:用户首次点"重新生成"时弹窗说明影响 + 让用户输入当前的 token 末 4 位
   // (避免误点一刀斩断所有客户端的连接)
@@ -165,17 +154,6 @@ export function Settings() {
       cancelled = true;
     };
   }, [reloadTick, t]);
-
-  // 卸载兜底：override 输入只在 blur/Enter 时保存，若用户输入后直接切走/关窗，
-  // 最后一次输入可能没触发 onBlur，这里把 ref 里最新的未提交值补保存一次。
-  useEffect(() => {
-    return () => {
-      const pending = overrideRef.current;
-      if (pending) {
-        updateSettings(pending).catch(() => {});
-      }
-    };
-  }, []);
 
   const handleAutoLaunch = async (next: boolean) => {
     if (autoLaunchBusy) return;
@@ -312,60 +290,6 @@ export function Settings() {
               {t("settings.npm_registry_card_desc")} <code className="text-fg">NPM_CONFIG_REGISTRY={"registry.npmmirror.com"}</code>
             </span>
           </Row>
-        </div>
-
-        {/* 使用统计数据源目录覆盖 */}
-        <div className="card space-y-3">
-          <div>
-            <h3 className="font-semibold">{t("settings.usage_overrides")}</h3>
-            <div className="text-xs text-fg-muted">{t("settings.usage_overrides_desc")}</div>
-          </div>
-          {USAGE_SOURCE_TOOLS.map(({ key, label }) => (
-            <Row key={key} label={label}>
-              <div className="flex items-center gap-2">
-                <input
-                  className="input font-mono"
-                  placeholder={t("settings.usage_override_placeholder") as string}
-                  value={settings.usage_overrides?.[key] ?? ""}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setSettings({
-                      ...settings,
-                      usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: value },
-                    });
-                    // 立即持久化到 ref，卸载时兜底保存
-                    overrideRef.current = {
-                      ...settings,
-                      usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: value },
-                    };
-                  }}
-                  onBlur={() => {
-                    overrideRef.current = settings;
-                    updateSettings(settings).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                  }}
-                  spellCheck={false}
-                />
-                {(settings.usage_overrides?.[key] ?? "") !== "" && (
-                  <button
-                    className="btn-ghost shrink-0 text-xs"
-                    onClick={() => {
-                      const next = {
-                        ...settings,
-                        usage_overrides: { ...(settings.usage_overrides ?? {}), [key]: "" },
-                      };
-                      setSettings(next);
-                      updateSettings(next).catch((err) => toast.error(t("settings.save_failed", { msg: describeError(err) }) as string));
-                    }}
-                  >
-                    {t("settings.usage_override_reset")}
-                  </button>
-                )}
-              </div>
-            </Row>
-          ))}
         </div>
 
         {/* 主题选择 */}
