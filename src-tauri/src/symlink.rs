@@ -32,6 +32,12 @@ pub fn create_dir_link(link: &Path, target: &Path) -> Result<(), SymlinkError> {
         const SYMBOLIC_LINK_FLAG_DIRECTORY: u32 = 0x0001;
         const SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE: u32 = 0x0002; // Win10 1703+,免 SeCreateSymbolicLinkPrivilege
 
+        // 无管理员权限且未开启开发者模式时，symlink 必然失败（1314），
+        // 直接走 junction 免特权路径，避免每次 reconcile 都打印错误日志。
+        if !can_create_unprivileged_symlink() {
+            return create_junction(link, target).map_err(SymlinkError::Io);
+        }
+
         let link_w: Vec<u16> = link.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
         let target_w: Vec<u16> = target.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
         let flags = SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
@@ -62,6 +68,37 @@ pub fn create_dir_link(link: &Path, target: &Path) -> Result<(), SymlinkError> {
     {
         std::os::unix::fs::symlink(target, link)?;
         Ok(())
+    }
+}
+
+/// Windows:检测当前进程能否创建目录 symlink。
+///
+/// 满足任一条件即可免特权创建（Win10 1703+）：
+/// 1. 进程以管理员运行（具备 SeCreateSymbolicLinkPrivilege）
+/// 2. 系统已开启开发者模式（注册表 AppModelUnlock\AllowDevelopmentWithoutDevLicense = 1）
+///
+/// 均不满足时 symlink 必然返回 ERROR_PRIVILEGE_NOT_HELD (1314)，
+/// 调用方应直接走 junction 免特权路径。
+#[cfg(windows)]
+fn can_create_unprivileged_symlink() -> bool {
+    use windows_sys::Win32::UI::Shell::IsUserAnAdmin;
+    // 管理员进程：直接具备 SeCreateSymbolicLinkPrivilege
+    if unsafe { IsUserAnAdmin() } != 0 {
+        return true;
+    }
+    // 开发者模式：HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(key) = hklm.open_subkey_with_flags(
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock",
+        KEY_READ,
+    ) else {
+        return false;
+    };
+    match key.get_value::<u32, _>("AllowDevelopmentWithoutDevLicense") {
+        Ok(v) => v == 1,
+        Err(_) => false,
     }
 }
 

@@ -37,7 +37,7 @@ export function ProviderStatsTable({ data }: { data: ProviderStats[] }) {
             <td className="py-2 pr-3">{p.totalOutputTokens.toLocaleString()}</td>
             <td className="py-2 pr-3">{p.totalCacheReadTokens.toLocaleString()}</td>
             <td className="py-2 pr-3">{p.totalCacheCreationTokens.toLocaleString()}</td>
-            <td className="py-2 text-right">${Number(p.totalCost).toFixed(4)}</td>
+            <td className="py-2 text-right">¥{Number(p.totalCost).toFixed(4)}</td>
           </tr>
         ))}
       </tbody>

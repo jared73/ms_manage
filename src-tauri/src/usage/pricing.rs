@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-/// 模型定价（每百万 token 的 USD 价格）
+/// 模型定价（每百万 token 的人民币价格，CNY）
+/// 国内模型使用官方人民币价；国外模型（Claude/GPT/Gemini/Grok）按官方美元价 × 7.2 汇率换算。
+/// 未公布 API 按量价的模型（如 GLM-5.2、GLM-5）按同系列近似档位给出参考值，可在 UI 中修改。
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
     pub input_cost_per_million: Decimal,
@@ -108,7 +110,7 @@ pub fn find_model_pricing(
     let row = conn.query_row(
         "SELECT input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million
-         FROM model_pricing WHERE model_id = ?1",
+         FROM model_pricing WHERE model_id = ?1 COLLATE NOCASE",
         [model_id],
         |r| {
             Ok((
@@ -121,10 +123,14 @@ pub fn find_model_pricing(
     );
     match row {
         Ok((i, o, cr, cc)) => ModelPricing::from_strings(&i, &o, &cr, &cc).ok(),
-        Err(e) => {
-            eprintln!("[USAGE-PRICING] 查询模型定价失败 {model_id}: {e}");
-            // 尝试 seed 内置定价
-            let seed = seed_pricing(model_id)?;
+        Err(_) => {
+            // 精确匹配未命中（首次同步/新模型）：尝试 seed 内置定价（前缀匹配不区分大小写）。
+            // seed 命中属于正常路径（自动落库后下次即可精确命中），不打错误日志；
+            // 仅当 seed 也没有时才报告，避免未知模型刷屏。
+            let Some(seed) = seed_pricing(model_id) else {
+                eprintln!("[USAGE-PRICING] 模型无内置定价 {model_id}");
+                return None;
+            };
             if let Err(e) = conn.execute(
                 "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                     input_cost_per_million, output_cost_per_million,
@@ -140,42 +146,79 @@ pub fn find_model_pricing(
 }
 
 /// 内置默认定价表：每一项 (model_prefix, input, output, cache_read, cache_creation)。
-/// 顺序即匹配优先级，窄前缀必须排在宽前缀之前（如 gpt-4o-mini 在 gpt-4o 之前）。
+/// 单位：元/百万 token（CNY）。顺序即匹配优先级，窄前缀必须排在宽前缀之前（如 gpt-4o-mini 在 gpt-4o 之前）。
 pub fn default_pricing_map(
 ) -> Vec<(&'static str, &'static str, &'static str, &'static str, &'static str)> {
     vec![
-        ("claude-3-5-sonnet", "3.0", "15.0", "0.3", "3.75"),
-        ("claude-sonnet-4", "3.0", "15.0", "0.3", "3.75"),
-        ("claude-3-7-sonnet", "3.0", "15.0", "0.3", "3.75"),
-        ("claude-3-5-haiku", "0.80", "4.0", "0.08", "1.0"),
-        ("claude-3-opus", "15.0", "75.0", "1.5", "18.75"),
-        ("gpt-4o-mini", "0.15", "0.60", "0.075", "0.15"),
-        ("gpt-4o", "2.50", "10.0", "1.25", "2.50"),
-        ("gpt-4.1-mini", "0.40", "1.60", "0.10", "0.40"),
-        ("gpt-4.1-nano", "0.10", "0.40", "0.025", "0.10"),
-        ("gpt-4.1", "2.0", "8.0", "0.5", "2.0"),
-        ("o3-mini", "1.10", "4.40", "0.55", "1.10"),
-        ("o4-mini", "1.10", "4.40", "0.55", "1.10"),
-        ("o3", "2.0", "8.0", "0.5", "2.0"),
-        ("o4", "2.0", "8.0", "0.5", "2.0"),
-        ("gemini-2.5-pro", "1.25", "10.0", "0.3125", "1.25"),
-        ("gemini-2.5-flash", "0.30", "2.50", "0.075", "0.30"),
-        ("deepseek-r1", "0.55", "2.19", "0.14", "0.55"),
-        ("deepseek-reasoner", "0.55", "2.19", "0.14", "0.55"),
-        ("deepseek", "0.27", "1.10", "0.07", "0.27"),
-        ("grok-4.5-build", "2.0", "6.0", "0.30", "2.0"),
-        ("grok", "2.0", "6.0", "0.30", "2.0"),
-        ("qwen", "0.50", "2.0", "0.10", "0.50"),
+        // ── Claude（官方美元价 × 7.2）──
+        ("claude-3-5-haiku", "5.76", "28.8", "0.576", "7.2"),
+        ("claude-3-5-sonnet", "21.6", "108", "2.16", "27"),
+        ("claude-3-7-sonnet", "21.6", "108", "2.16", "27"),
+        ("claude-3-opus", "108", "540", "10.8", "135"),
+        ("claude-sonnet-4", "21.6", "108", "2.16", "27"),
+        ("claude-opus-4", "36", "180", "3.6", "45"),
+        // ── OpenAI（官方美元价 × 7.2）──
+        ("gpt-4o-mini", "1.08", "4.32", "0.54", "1.08"),
+        ("gpt-4o", "18", "72", "9", "18"),
+        ("gpt-4.1-mini", "2.88", "11.52", "0.72", "2.88"),
+        ("gpt-4.1-nano", "0.72", "2.88", "0.18", "0.72"),
+        ("gpt-4.1", "14.4", "57.6", "3.6", "14.4"),
+        ("o3-mini", "7.92", "31.68", "3.96", "7.92"),
+        ("o3", "14.4", "57.6", "3.6", "14.4"),
+        ("o4-mini", "7.92", "31.68", "3.96", "7.92"),
+        ("o4", "14.4", "57.6", "3.6", "14.4"),
+        // ── Gemini（官方美元价 × 7.2）──
+        ("gemini-2.5-pro", "9", "72", "2.25", "9"),
+        ("gemini-2.5-flash", "2.16", "18", "0.54", "2.16"),
+        // ── DeepSeek（官方人民币价）──
+        ("deepseek-v4-flash", "1", "2", "0.02", "1"),
+        ("deepseek-v4-pro", "3", "6", "0.025", "3"),
+        ("deepseek-r1", "3.96", "15.77", "1.01", "3.96"),
+        ("deepseek-reasoner", "3.96", "15.77", "1.01", "3.96"),
+        ("deepseek", "1.94", "7.92", "0.50", "1.94"),
+        // ── Kimi（官方人民币价）──
+        ("k3", "20", "100", "2", "20"),
+        ("kimi-k2.7", "6.5", "27", "1.3", "6.5"),
+        ("kimi-for-coding", "6.5", "27", "1.3", "6.5"),
+        ("k2.7", "6.5", "27", "1.3", "6.5"),
+        ("k2.6", "6.5", "27", "1.3", "6.5"),
+        // ── MiniMax（官方人民币价）──
+        ("MiniMax-M3", "4.2", "16.8", "0.84", "4.2"),
+        ("MiniMax-M2.7-highspeed", "4.2", "16.8", "0.42", "2.625"),
+        ("MiniMax-M2.7", "2.1", "8.4", "0.42", "2.625"),
+        // ── 小米 MiMo（官方人民币价）──
+        ("mimo-v2.5-pro", "3", "6", "0.025", "3"),
+        ("mimo-v2.5", "1", "2", "0.02", "1"),
+        // ── Qwen（官方人民币价；3.7-Max 12/36，3.5-Plus 输入 0.8）──
+        ("qwen3.7-max", "12", "36", "2.4", "12"),
+        ("qwen3.5-plus", "0.8", "2.4", "0.16", "0.8"),
+        ("qwen", "3.6", "14.4", "0.72", "3.6"),
+        // ── Grok（官方美元价 × 7.2）──
+        ("grok-4.5-build", "14.4", "43.2", "2.16", "14.4"),
+        ("grok", "14.4", "43.2", "2.16", "14.4"),
+        // ── 智谱（GLM-5.1 官方价 6/24；未公布按量价的按同系列参考值）──
+        ("glm-5.2", "8", "28", "0.8", "8"),
+        ("glm-5.1", "6", "24", "0.6", "6"),
+        ("glm-5", "8", "28", "0.8", "8"),
+        ("glm-4.7", "5", "20", "0.5", "5"),
+        ("glm-4.6", "5", "20", "0.5", "5"),
+        ("glm-4.5-air", "0.6", "0.6", "0.1", "0.6"),
+        // ── 腾讯混元（Hy3 官方价）──
+        ("hunyuan", "1", "4", "0.25", "1"),
+        // ── 字节豆包（Doubao-1.5-pro-32k 官方价）──
+        ("doubao", "0.8", "2", "0.16", "0.8"),
     ]
 }
 
 /// 内置定价 seed：model_id -> (input, output, cache_read, cache_creation, ModelPricing)
+/// 前缀匹配不区分大小写（如 GLM-5.2 / glm-5.2 均可命中）
 fn seed_pricing(
     model_id: &str,
 ) -> Option<(&'static str, &'static str, &'static str, &'static str, ModelPricing)> {
+    let lower = model_id.to_lowercase();
     let (_, input, output, cache_read, cache_creation) = default_pricing_map()
         .into_iter()
-        .find(|(prefix, _, _, _, _)| model_id.starts_with(prefix))?;
+        .find(|(prefix, _, _, _, _)| lower.starts_with(&prefix.to_lowercase()))?;
     let p = ModelPricing::from_strings(input, output, cache_read, cache_creation).ok()?;
     Some((input, output, cache_read, cache_creation, p))
 }
@@ -253,11 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn test_seed_case_insensitive() {
+        assert_eq!(seed_pricing("GLM-5.2").unwrap().0, "8");
+        assert_eq!(seed_pricing("GLM-5.1-highspeed").unwrap().0, "6");
+        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "4.2");
+        assert_eq!(seed_pricing("DEEPSEEK-V4-FLASH").unwrap().0, "1");
+        assert_eq!(seed_pricing("Kimi-K2.7-Code").unwrap().0, "6.5");
+        assert_eq!(seed_pricing("claude-opus-4-8").unwrap().0, "36");
+        assert_eq!(seed_pricing("MiniMax-M2.7-highspeed").unwrap().0, "4.2");
+        assert_eq!(seed_pricing("MiniMax-M2.7").unwrap().0, "2.1");
+    }
+
+    #[test]
     fn test_seed_narrow_prefixes() {
-        assert_eq!(seed_pricing("gpt-4o-mini").unwrap().0, "0.15");
-        assert_eq!(seed_pricing("gpt-4o").unwrap().0, "2.50");
-        assert_eq!(seed_pricing("o4-mini").unwrap().0, "1.10");
-        assert_eq!(seed_pricing("grok-4.5-build").unwrap().0, "2.0");
+        assert_eq!(seed_pricing("gpt-4o-mini").unwrap().0, "1.08");
+        assert_eq!(seed_pricing("gpt-4o").unwrap().0, "18");
+        assert_eq!(seed_pricing("o4-mini").unwrap().0, "7.92");
+        assert_eq!(seed_pricing("grok-4.5-build").unwrap().0, "14.4");
+        assert_eq!(seed_pricing("deepseek-v4-flash").unwrap().0, "1");
+        assert_eq!(seed_pricing("k3").unwrap().0, "20");
+        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "4.2");
     }
 
     #[test]
@@ -268,6 +326,8 @@ mod tests {
         assert!(prefixes.contains(&"claude-sonnet-4"));
         assert!(prefixes.contains(&"gpt-4o"));
         assert!(prefixes.contains(&"deepseek-reasoner"));
+        assert!(prefixes.contains(&"k3"));
+        assert!(prefixes.contains(&"MiniMax-M3"));
     }
 
     #[test]

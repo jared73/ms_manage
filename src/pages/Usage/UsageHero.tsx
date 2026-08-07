@@ -13,7 +13,7 @@ export function UsageHero({ summary }: { summary: UsageSummary | null }) {
   };
 
   const cards: { key: string; value: string; label: string; raw?: string }[] = [
-    { key: "cost", value: `$${cost.toFixed(4)}`, label: t("usage.total_cost") },
+    { key: "cost", value: `¥${cost.toFixed(4)}`, label: t("usage.total_cost") },
     { key: "tokens", value: formatTokens(tokens), label: t("usage.total_tokens"), raw: tokens.toLocaleString() },
     { key: "requests", value: (summary?.requestCount ?? 0).toLocaleString(), label: t("usage.total_requests") },
     {

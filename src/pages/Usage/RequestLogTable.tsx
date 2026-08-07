@@ -66,7 +66,7 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
                 <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
                 <td className="py-1.5 pr-3 text-right text-xs">{r.inputTokens.toLocaleString()}</td>
                 <td className="py-1.5 pr-3 text-right text-xs">{r.outputTokens.toLocaleString()}</td>
-                <td className="py-1.5 text-right text-xs">${Number(r.totalCostUsd).toFixed(4)}</td>
+                <td className="py-1.5 text-right text-xs">¥{Number(r.totalCostUsd).toFixed(4)}</td>
               </tr>
             ))}
           </tbody>

@@ -19,7 +19,7 @@ export function ModelStatsTable({ data }: { data: ModelStats[] }) {
             <td className="py-2 pr-3 font-mono text-xs">{m.model}</td>
             <td className="py-2 pr-3">{m.requestCount.toLocaleString()}</td>
             <td className="py-2 pr-3">{m.totalTokens.toLocaleString()}</td>
-            <td className="py-2 text-right">${Number(m.totalCost).toFixed(4)}</td>
+            <td className="py-2 text-right">¥{Number(m.totalCost).toFixed(4)}</td>
           </tr>
         ))}
       </tbody>
