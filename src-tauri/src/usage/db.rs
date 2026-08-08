@@ -51,6 +51,7 @@ pub fn init_schema(db: &crate::usage::UsageDb) -> Result<()> {
             cache_read_tokens INTEGER NOT NULL DEFAULT 0,
             cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
             total_cost_usd TEXT NOT NULL DEFAULT '0',
+            failed_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (date, app_type, model)
         );
 
@@ -90,6 +91,20 @@ pub fn init_schema(db: &crate::usage::UsageDb) -> Result<()> {
             [],
         )
         .context("迁移 request_logs 增加 input_token_semantics 列失败")?;
+    }
+
+    // 迁移：rollup 表补 failed_count 列（老库无）
+    let rollup_cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(usage_daily_rollups)")?
+        .query_map([], |r| r.get(1))?
+        .filter_map(|c: Result<String, _>| c.ok())
+        .collect();
+    if !rollup_cols.iter().any(|c| c == "failed_count") {
+        conn.execute(
+            "ALTER TABLE usage_daily_rollups ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .context("迁移 usage_daily_rollups 增加 failed_count 列失败")?;
     }
 
     // 启动时批量写入内置默认定价（幂等）

@@ -1,6 +1,7 @@
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
+use std::str::FromStr;
 use std::time::SystemTime;
 
 /// 一次同步的结果汇总
@@ -95,8 +96,7 @@ pub fn update_sync_state(db: &UsageDb, file_path: &str, last_modified: i64, line
 /// 插入一条请求日志。request_id 冲突时跳过（INSERT OR IGNORE）。
 /// 返回 true = 新插入，false = 已存在跳过。
 /// conn 由调用方持有（通常在 with_transaction 事务内）。
-pub fn insert_request_log(
-    conn: &rusqlite::Connection,
+pub fn insert_request_log(    conn: &rusqlite::Connection,
     request_id: &str,
     app_type: &str,
     model: &str,
@@ -146,4 +146,92 @@ pub fn insert_request_log(
     )
     .context("插入 request_logs 失败")?;
     Ok(inserted > 0)
+}
+
+/// 遍历全部历史请求，按当前 model_pricing 定价重算费用（改价后调用）。
+/// 返回重算的请求条数。整体包在单事务中，避免逐条 fsync；数据量大时调用方需在 spawn_blocking 中执行。
+pub fn recalculate_all_costs(db: &crate::usage::UsageDb) -> Result<u32> {
+    let conn = db.conn.lock();
+    conn.execute_batch("BEGIN")?;
+    let result = (|| -> Result<u32> {
+        let batch = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT request_id, app_type, model, input_tokens, output_tokens,
+                            cache_read_tokens, cache_creation_tokens, cost_multiplier
+                     FROM request_logs",
+                )
+                .context("读取 request_logs 失败")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, u32>(3)?,
+                        r.get::<_, u32>(4)?,
+                        r.get::<_, u32>(5)?,
+                        r.get::<_, u32>(6)?,
+                        r.get::<_, String>(7)?,
+                    ))
+                })
+                .context("查询 request_logs 失败")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.context("读取 request_logs 行失败")?);
+            }
+            out
+        };
+
+        let mut updated = 0u32;
+        for (request_id, app_type, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, multiplier) in batch {
+            let usage = crate::usage::pricing::TokenUsage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                model: Some(model.clone()),
+            };
+            let Some(pricing) = crate::usage::pricing::find_model_pricing(&conn, &model) else {
+                continue; // 无定价则跳过（保持原值）
+            };
+            let multiplier = rust_decimal::Decimal::from_str(&multiplier)
+                .unwrap_or(rust_decimal::Decimal::from(1));
+            let costs = crate::usage::pricing::calculate_cost(
+                &usage,
+                &pricing,
+                crate::usage::pricing::input_includes_cache_read(&app_type),
+                multiplier,
+            );
+            conn.execute(
+                "UPDATE request_logs SET
+                    input_cost_usd = ?1, output_cost_usd = ?2,
+                    cache_read_cost_usd = ?3, cache_creation_cost_usd = ?4,
+                    total_cost_usd = ?5, pricing_model = ?6
+                 WHERE request_id = ?7",
+                rusqlite::params![
+                    costs.input_cost.to_string(),
+                    costs.output_cost.to_string(),
+                    costs.cache_read_cost.to_string(),
+                    costs.cache_creation_cost.to_string(),
+                    costs.total_cost.to_string(),
+                    model,
+                    request_id,
+                ],
+            )
+            .context("更新 request_logs 费用失败")?;
+            updated += 1;
+        }
+        Ok(updated)
+    })();
+    match result {
+        Ok(n) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(n)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }

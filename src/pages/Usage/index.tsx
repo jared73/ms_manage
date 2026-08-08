@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, RefreshCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { getModelStats, getProviderStats, getUsageSummary, getUsageTrends,
+  recalculateCosts,
   type DailyStats, type ModelStats, type ProviderStats, type UsageSummary } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import { Section } from "@/components/Section";
@@ -39,6 +41,15 @@ function rangeToEpoch(days: number): number | undefined {
   return Math.floor(Date.now() / 1000) - days * 86400;
 }
 
+const APP_FILTERS = [
+  { key: "", label: "usage.app_all" },
+  { key: "opencode", label: "OpenCode" },
+  { key: "claude", label: "Claude Code" },
+  { key: "codex", label: "Codex" },
+  { key: "gemini", label: "Gemini" },
+  { key: "grokbuild", label: "Grok Build" },
+] as const;
+
 export function Usage() {
   const { t } = useTranslation();
   const [rangeKey, setRangeKey] = useState<(typeof RANGES)[number]["key"]>("today");
@@ -50,9 +61,12 @@ export function Usage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState(0);
   const [pricingOpen, setPricingOpen] = useState(false);
+  const [appFilter, setAppFilter] = useState<string>("");
+  const [recalcBusy, setRecalcBusy] = useState(false);
 
   const startDate = useMemo(() => rangeToEpoch((RANGES.find((r) => r.key === rangeKey) ?? RANGES[0]).days), [rangeKey]);
   const grouping = rangeKey === "today" ? "hour" : "day";
+  const appParam = appFilter || undefined;
 
   const requestSeqRef = useRef(0);
 
@@ -60,8 +74,8 @@ export function Usage() {
     const reqId = ++requestSeqRef.current;
     try {
       const [s, tr, p, m] = await Promise.all([
-        getUsageSummary(startDate),
-        getUsageTrends(startDate, undefined, grouping),
+        getUsageSummary(startDate, undefined, appParam),
+        getUsageTrends(startDate, undefined, grouping, appParam),
         getProviderStats(startDate),
         getModelStats(startDate),
       ]);
@@ -76,7 +90,7 @@ export function Usage() {
       if (reqId !== requestSeqRef.current) return;
       setError(describeError(e));
     }
-  }, [startDate, grouping]);
+  }, [startDate, grouping, appParam]);
 
   useEffect(() => {
     void load();
@@ -89,6 +103,19 @@ export function Usage() {
     }, refreshMs);
     return () => clearInterval(id);
   }, [refreshMs, load]);
+
+  const doRecalc = async () => {
+    setRecalcBusy(true);
+    try {
+      const n = await recalculateCosts();
+      toast.success(t("usage.recalc_done", { count: n }));
+      await load();
+    } catch (e) {
+      toast.error(describeError(e));
+    } finally {
+      setRecalcBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-5 p-6">
@@ -131,7 +158,24 @@ export function Usage() {
       <UsageHero summary={summary} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Section title={t("usage.trend")} className="lg:col-span-2">
+        <Section
+          title={t("usage.trend")}
+          className="lg:col-span-2"
+          action={
+            <select
+              value={appFilter}
+              onChange={(e) => setAppFilter(e.target.value)}
+              className="rounded border border-border bg-bg px-2 py-1 text-xs text-fg-muted outline-none focus:border-accent"
+              aria-label={t("usage.filter_app")}
+            >
+              {APP_FILTERS.map((a) => (
+                <option key={a.key || "all"} value={a.key}>
+                  {t(a.label)}
+                </option>
+              ))}
+            </select>
+          }
+        >
           <UsageTrendChart data={trends} grouping={grouping} />
         </Section>
         <DataSourcesPanel onSynced={load} />
@@ -170,6 +214,17 @@ export function Usage() {
           <ChevronDown size={16} className={`text-fg-muted transition-transform ${pricingOpen ? "rotate-180" : ""}`} />
         </button>
         <div id="pricing-content" className={`border-t border-border p-4 ${pricingOpen ? "block" : "hidden"}`}>
+          <div className="mb-3 flex justify-end">
+            <button
+              onClick={doRecalc}
+              disabled={recalcBusy}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-overlay-soft disabled:opacity-50"
+              title={t("usage.recalc_tip")}
+            >
+              <RefreshCcw size={13} className={recalcBusy ? "animate-spin" : ""} />
+              {t("usage.recalc")}
+            </button>
+          </div>
           <PricingPanel />
         </div>
       </div>

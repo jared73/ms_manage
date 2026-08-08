@@ -5,6 +5,17 @@ import { toast } from "sonner";
 import { getUsageDataSources, syncSessionUsage, type DataSourceStatus, type SessionSyncResult } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 
+function fmtTime(ts?: number): string {
+  if (!ts) return "-";
+  const d = new Date(ts * 1000);
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return d.toLocaleString();
+}
+
 export function DataSourcesPanel({ onSynced }: { onSynced?: () => void }) {
   const { t } = useTranslation();
   const [sources, setSources] = useState<DataSourceStatus[]>([]);
@@ -52,9 +63,13 @@ export function DataSourcesPanel({ onSynced }: { onSynced?: () => void }) {
       <ul className="space-y-2">
         {sources.map((s) => (
           <li key={s.appType} className="flex items-center gap-2 text-xs">
-            <span className={`h-2 w-2 rounded-full ${s.exists ? "bg-emerald-500" : "bg-gray-400"}`} />
+            <span className={`h-2 w-2 shrink-0 rounded-full ${s.exists ? "bg-emerald-500" : "bg-gray-400"}`} />
             <span className="w-24 shrink-0 font-medium">{s.label}</span>
-            <code className="truncate font-mono text-fg-muted">{s.path}</code>
+            <span className="shrink-0 text-fg-muted">
+              {s.importedCount.toLocaleString()} 条
+            </span>
+            <span className="shrink-0 text-fg-muted/70">{fmtTime(s.lastSyncedAt)}</span>
+            <code className="truncate font-mono text-fg-muted/60">{s.path}</code>
           </li>
         ))}
       </ul>

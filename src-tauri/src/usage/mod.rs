@@ -1,6 +1,7 @@
 pub mod db;
 pub mod paths;
 pub mod pricing;
+pub mod rollup;
 pub mod session_common;
 pub mod session_claude;
 pub mod session_codex;
@@ -30,6 +31,10 @@ pub fn sync_all(db: &UsageDb, paths: &paths::UsagePaths) -> Result<session_commo
             Ok(r) => result.merge(r),
             Err(e) => result.errors.push(format!("{name} 同步失败: {e:#}")),
         }
+    }
+    // 同步完成后重建日汇总，保证统计查询走 rollup
+    if let Err(e) = rollup::rebuild_rollups(db) {
+        result.errors.push(format!("rollup 重建失败: {e:#}"));
     }
     Ok(result)
 }

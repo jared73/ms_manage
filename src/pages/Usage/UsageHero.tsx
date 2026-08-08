@@ -22,6 +22,12 @@ export function UsageHero({ summary }: { summary: UsageSummary | null }) {
       label: t("usage.cache_hit_rate"),
       raw: (summary?.totalCacheReadTokens ?? 0).toLocaleString(),
     },
+    {
+      key: "failRate",
+      value: summary ? `${((summary.failureRate ?? 0) * 100).toFixed(2)}%` : "0%",
+      label: t("usage.failure_rate"),
+      raw: `${summary?.failedCount ?? 0} / ${summary?.requestCount ?? 0}`,
+    },
   ];
 
   return (

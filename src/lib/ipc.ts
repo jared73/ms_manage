@@ -303,6 +303,8 @@ export interface UsageSummary {
   totalCacheCreationTokens: number;
   totalTokens: number;
   cacheHitRate: number;
+  failedCount: number;
+  failureRate: number;
 }
 
 export interface DailyStats {
@@ -339,6 +341,8 @@ export interface DataSourceStatus {
   label: string;
   path: string;
   exists: boolean;
+  lastSyncedAt?: number;
+  importedCount: number;
 }
 
 export interface SessionSyncResult {
@@ -364,14 +368,21 @@ export const getUsageSummary = (
   endDate?: number,
   appType?: string,
 ) => invoke<UsageSummary>("get_usage_summary", { startDate, endDate, appType });
-export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string) =>
-  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping });
+export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string, appType?: string) =>
+  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping, appType });
 export const getModelStats = (startDate?: number, endDate?: number) =>
   invoke<ModelStats[]>("get_model_stats", { startDate, endDate });
 export const getProviderStats = (startDate?: number, endDate?: number) =>
   invoke<ProviderStats[]>("get_provider_stats", { startDate, endDate });
 export const getUsageDataSources = () => invoke<DataSourceStatus[]>("get_usage_data_sources");
 export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_usage");
+export const recalculateCosts = () => invoke<number>("recalculate_costs");
+export const exportRequestLogsCsv = (
+  startDate?: number,
+  endDate?: number,
+  appType?: string,
+  model?: string,
+) => invoke<string>("export_request_logs_csv", { startDate, endDate, appType, model });
 export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");
 export const updateModelPricingBatch = (items: ModelPricingInput[]) =>
   invoke<void>("update_model_pricing_batch", { items });
@@ -400,6 +411,9 @@ export interface RequestLogRow {
   totalCostUsd: string;
   createdAt: number;
   sessionId?: string;
+  latencyMs: number;
+  statusCode: number;
+  errorMessage?: string;
 }
 
 export interface PaginatedLogs {

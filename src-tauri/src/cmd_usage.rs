@@ -4,59 +4,107 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_usage_summary(
+pub async fn get_usage_summary(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
     end_date: Option<i64>,
     app_type: Option<String>,
 ) -> Result<crate::usage::stats::UsageSummary, String> {
     let db = state.usage_db.clone();
-    crate::usage::stats::get_usage_summary(&db, start_date, end_date, app_type.as_deref())
-        .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        crate::usage::stats::get_usage_summary(&db, start_date, end_date, app_type.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_provider_stats(
+pub async fn get_provider_stats(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
     end_date: Option<i64>,
 ) -> Result<Vec<crate::usage::stats::ProviderStats>, String> {
     let db = state.usage_db.clone();
-    crate::usage::stats::get_provider_stats(&db, start_date, end_date).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        crate::usage::stats::get_provider_stats(&db, start_date, end_date)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_usage_trends(
+pub async fn get_usage_trends(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
     end_date: Option<i64>,
     grouping: Option<String>,
+    app_type: Option<String>,
 ) -> Result<Vec<crate::usage::stats::DailyStats>, String> {
     let db = state.usage_db.clone();
-    let grouping = grouping.as_deref().unwrap_or("day");
-    crate::usage::stats::get_usage_trends(&db, start_date, end_date, grouping).map_err(|e| e.to_string())
+    let grouping = grouping.unwrap_or_else(|| "day".to_string());
+    tokio::task::spawn_blocking(move || {
+        crate::usage::stats::get_usage_trends(&db, start_date, end_date, &grouping, app_type.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_model_stats(
+pub async fn get_model_stats(
     state: State<'_, Arc<AppState>>,
     start_date: Option<i64>,
     end_date: Option<i64>,
 ) -> Result<Vec<crate::usage::stats::ModelStats>, String> {
     let db = state.usage_db.clone();
-    crate::usage::stats::get_model_stats(&db, start_date, end_date).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        crate::usage::stats::get_model_stats(&db, start_date, end_date)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_usage_data_sources(
+pub async fn get_usage_data_sources(
     state: State<'_, Arc<AppState>>,
-) -> Vec<crate::usage::stats::DataSourceStatus> {
+) -> Result<Vec<crate::usage::stats::DataSourceStatus>, String> {
     let overrides = state
         .storage
         .load_settings()
         .map(|s| s.usage_overrides)
         .unwrap_or_default();
-    crate::usage::stats::get_usage_data_sources(&overrides)
+    let db = state.usage_db.clone();
+    tokio::task::spawn_blocking(move || crate::usage::stats::get_usage_data_sources(&db, &overrides))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// 导出请求日志 CSV（按当前过滤条件），返回 CSV 文本。
+#[tauri::command]
+pub async fn export_request_logs_csv(
+    state: State<'_, Arc<AppState>>,
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_type: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    let db = state.usage_db.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::usage::stats::export_request_logs_csv(
+            &db,
+            start_date,
+            end_date,
+            app_type.as_deref(),
+            model.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 /// 立即手动同步所有数据源
@@ -91,31 +139,35 @@ pub struct ModelPricingInput {
 }
 
 #[tauri::command]
-pub fn get_model_pricing(
+pub async fn get_model_pricing(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let db = state.usage_db.clone();
-    let conn = db.conn.lock();
-    let mut stmt = conn
-        .prepare(
-            "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
-                    cache_read_cost_per_million, cache_creation_cost_per_million
-             FROM model_pricing ORDER BY model_id",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(serde_json::json!({
-                "modelId": r.get::<_, String>(0)?,
-                "displayName": r.get::<_, String>(1)?,
-                "inputCostPerMillion": r.get::<_, String>(2)?,
-                "outputCostPerMillion": r.get::<_, String>(3)?,
-                "cacheReadCostPerMillion": r.get::<_, String>(4)?,
-                "cacheCreationCostPerMillion": r.get::<_, String>(5)?,
-            }))
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
+                        cache_read_cost_per_million, cache_creation_cost_per_million
+                 FROM model_pricing ORDER BY model_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "modelId": r.get::<_, String>(0)?,
+                    "displayName": r.get::<_, String>(1)?,
+                    "inputCostPerMillion": r.get::<_, String>(2)?,
+                    "outputCostPerMillion": r.get::<_, String>(3)?,
+                    "cacheReadCostPerMillion": r.get::<_, String>(4)?,
+                    "cacheCreationCostPerMillion": r.get::<_, String>(5)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn validate_price(name: &str, model: &str, v: &str) -> Result<(), String> {
@@ -126,15 +178,19 @@ fn validate_price(name: &str, model: &str, v: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn delete_model_pricing(
+pub async fn delete_model_pricing(
     state: State<'_, Arc<AppState>>,
     model_id: String,
 ) -> Result<(), String> {
     let db = state.usage_db.clone();
-    let conn = db.conn.lock();
-    conn.execute("DELETE FROM model_pricing WHERE model_id = ?1", [&model_id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock();
+        conn.execute("DELETE FROM model_pricing WHERE model_id = ?1", [&model_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// app 级成本倍率配置
@@ -146,92 +202,127 @@ pub struct AppConfigInput {
 }
 
 #[tauri::command]
-pub fn get_app_configs(
+pub async fn get_app_configs(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let db = state.usage_db.clone();
-    let conn = db.conn.lock();
-    let mut stmt = conn
-        .prepare("SELECT app_type, cost_multiplier FROM app_config ORDER BY app_type")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(serde_json::json!({
-                "appType": r.get::<_, String>(0)?,
-                "costMultiplier": r.get::<_, String>(1)?,
-            }))
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock();
+        let mut stmt = conn
+            .prepare("SELECT app_type, cost_multiplier FROM app_config ORDER BY app_type")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "appType": r.get::<_, String>(0)?,
+                    "costMultiplier": r.get::<_, String>(1)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn update_app_config_batch(
+pub async fn update_app_config_batch(
     state: State<'_, Arc<AppState>>,
     items: Vec<AppConfigInput>,
 ) -> Result<(), String> {
     let db = state.usage_db.clone();
-    let conn = db.conn.lock();
-    for item in &items {
-        match item.cost_multiplier.trim().parse::<f64>() {
-            Ok(n) if n > 0.0 => {}
-            _ => return Err(format!("应用 {} 的成本倍率非法: {}", item.app_type, item.cost_multiplier)),
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock();
+        for item in &items {
+            match item.cost_multiplier.trim().parse::<f64>() {
+                Ok(n) if n > 0.0 => {}
+                _ => {
+                    return Err(format!(
+                        "应用 {} 的成本倍率非法: {}",
+                        item.app_type, item.cost_multiplier
+                    ))
+                }
+            }
         }
-    }
-    for item in items {
-        conn.execute(
-            "INSERT INTO app_config (app_type, cost_multiplier)
-             VALUES (?1, ?2)
-             ON CONFLICT(app_type) DO UPDATE SET cost_multiplier = excluded.cost_multiplier",
-            rusqlite::params![item.app_type, item.cost_multiplier.trim()],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+        for item in items {
+            conn.execute(
+                "INSERT INTO app_config (app_type, cost_multiplier)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(app_type) DO UPDATE SET cost_multiplier = excluded.cost_multiplier",
+                rusqlite::params![item.app_type, item.cost_multiplier.trim()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn update_model_pricing_batch(
+pub async fn update_model_pricing_batch(
     state: State<'_, Arc<AppState>>,
     items: Vec<ModelPricingInput>,
 ) -> Result<(), String> {
     let db = state.usage_db.clone();
-    let conn = db.conn.lock();
-    for item in &items {
-        validate_price("input_cost_per_million", &item.model_id, &item.input_cost_per_million)?;
-        validate_price("output_cost_per_million", &item.model_id, &item.output_cost_per_million)?;
-        validate_price("cache_read_cost_per_million", &item.model_id, &item.cache_read_cost_per_million)?;
-        validate_price("cache_creation_cost_per_million", &item.model_id, &item.cache_creation_cost_per_million)?;
-    }
-    for item in items {
-        let display_name = item
-            .display_name
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&item.model_id);
-        conn.execute(
-            "INSERT INTO model_pricing (model_id, display_name,
-                input_cost_per_million, output_cost_per_million,
-                cache_read_cost_per_million, cache_creation_cost_per_million)
-             VALUES (?1, ?6, ?2, ?3, ?4, ?5)
-             ON CONFLICT(model_id) DO UPDATE SET
-                display_name = excluded.display_name,
-                input_cost_per_million = excluded.input_cost_per_million,
-                output_cost_per_million = excluded.output_cost_per_million,
-                cache_read_cost_per_million = excluded.cache_read_cost_per_million,
-                cache_creation_cost_per_million = excluded.cache_creation_cost_per_million",
-            rusqlite::params![
-                item.model_id,
-                item.input_cost_per_million,
-                item.output_cost_per_million,
-                item.cache_read_cost_per_million,
-                item.cache_creation_cost_per_million,
-                display_name,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn.lock();
+        for item in &items {
+            validate_price("input_cost_per_million", &item.model_id, &item.input_cost_per_million)?;
+            validate_price("output_cost_per_million", &item.model_id, &item.output_cost_per_million)?;
+            validate_price("cache_read_cost_per_million", &item.model_id, &item.cache_read_cost_per_million)?;
+            validate_price("cache_creation_cost_per_million", &item.model_id, &item.cache_creation_cost_per_million)?;
+        }
+        for item in items {
+            let display_name = item
+                .display_name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&item.model_id);
+            conn.execute(
+                "INSERT INTO model_pricing (model_id, display_name,
+                    input_cost_per_million, output_cost_per_million,
+                    cache_read_cost_per_million, cache_creation_cost_per_million)
+                 VALUES (?1, ?6, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(model_id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    input_cost_per_million = excluded.input_cost_per_million,
+                    output_cost_per_million = excluded.output_cost_per_million,
+                    cache_read_cost_per_million = excluded.cache_read_cost_per_million,
+                    cache_creation_cost_per_million = excluded.cache_creation_cost_per_million",
+                rusqlite::params![
+                    item.model_id,
+                    item.input_cost_per_million,
+                    item.output_cost_per_million,
+                    item.cache_read_cost_per_million,
+                    item.cache_creation_cost_per_million,
+                    display_name,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 按当前模型定价重算全部历史请求的费用（改价后调用，同步更新 rollup）。
+/// 数据量大时耗时较长，放到阻塞线程池执行，避免卡住 tauri 主线程。
+#[tauri::command]
+pub async fn recalculate_costs(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+    let db = state.usage_db.clone();
+    tokio::task::spawn_blocking(move || {
+        // 与后台同步互斥，避免重算期间新数据落库导致结果不一致
+        let _guard = crate::usage::sync_mutex().lock();
+        let recalculated =
+            crate::usage::session_common::recalculate_all_costs(&db).map_err(|e| e.to_string())?;
+        // 重算后重建 rollup
+        crate::usage::rollup::rebuild_rollups(&db).map_err(|e| e.to_string())?;
+        Ok(recalculated)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Deserialize)]
@@ -255,20 +346,26 @@ pub struct PaginatedLogs {
 }
 
 #[tauri::command]
-pub fn get_request_logs(
+pub async fn get_request_logs(
     state: State<'_, Arc<AppState>>,
     filters: RequestLogFilters,
 ) -> Result<PaginatedLogs, String> {
     let db = state.usage_db.clone();
-    let p = crate::usage::stats::get_request_logs(
-        &db,
-        filters.start_date,
-        filters.end_date,
-        filters.app_type.as_deref(),
-        filters.model.as_deref(),
-        filters.page.unwrap_or(1).max(1),
-        filters.page_size.unwrap_or(50).min(500),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(PaginatedLogs { rows: p.rows, total: p.total, page: p.page, page_size: p.page_size })
+    let page = filters.page.unwrap_or(1).max(1);
+    let page_size = filters.page_size.unwrap_or(50).min(500);
+    tokio::task::spawn_blocking(move || {
+        let p = crate::usage::stats::get_request_logs(
+            &db,
+            filters.start_date,
+            filters.end_date,
+            filters.app_type.as_deref(),
+            filters.model.as_deref(),
+            page,
+            page_size,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(PaginatedLogs { rows: p.rows, total: p.total, page: p.page, page_size: p.page_size })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

@@ -252,6 +252,8 @@ pub fn run() {
             cmd_usage::get_app_configs,
             cmd_usage::update_app_config_batch,
             cmd_usage::get_request_logs,
+            cmd_usage::recalculate_costs,
+            cmd_usage::export_request_logs_csv,
             proxy_endpoint::start_proxy,
             proxy_endpoint::stop_proxy,
             proxy_endpoint::get_tools_total,
