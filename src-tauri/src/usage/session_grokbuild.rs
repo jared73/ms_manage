@@ -1,7 +1,7 @@
 use crate::usage::paths::UsagePaths;
 use crate::usage::pricing::{
-    calculate_cost, find_model_pricing, input_includes_cache_read, CostBreakdown, ModelPricing,
-    TokenUsage,
+    calculate_cost, find_model_pricing_cached, get_settle_window_seconds, input_includes_cache_read,
+    CostBreakdown, ModelPricing, TokenUsage,
 };
 use crate::usage::session_common::{
     get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
@@ -13,8 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// 事件沉降窗：只导入早于「现在 − 2 分钟」的事件，避免与代理双算
-const SETTLE_WINDOW_SECONDS: i64 = 120;
+/// 事件沉降窗默认值（2 分钟）；可被 app_config.settle_window_seconds 覆盖。
+const SETTLE_WINDOW_DEFAULT_SECS: i64 = 120;
 
 /// 同步 Grok Build 使用数据（~/.grok/{sessions,archived_sessions}/**/updates.jsonl）
 pub fn sync_grokbuild_usage(db: &UsageDb, paths: &UsagePaths) -> Result<SessionSyncResult> {
@@ -62,7 +62,7 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
     let metadata = fs::metadata(file_path).context("无法读取文件元数据")?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    let (last_modified, _) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, _, _, _) = get_sync_state(db, &file_path_str)?;
     if file_modified <= last_modified {
         return Ok(SessionSyncResult::default());
     }
@@ -84,44 +84,55 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
 
     let mut result = SessionSyncResult::default();
     let mut deferred = false;
+    let mut pricing_cache: std::collections::HashMap<String, Option<ModelPricing>> =
+        std::collections::HashMap::new();
 
-    with_transaction(db, |conn| {
-        for (idx, event) in events.iter().enumerate() {
-            if now.saturating_sub(event.created_at) < SETTLE_WINDOW_SECONDS {
-                deferred = true;
-                break;
+    // settle_window 可被 app_config 覆盖(否则用 2 分钟默认)
+    // 在循环外预先查询一次(避免每个事件都查 DB)
+    let settle_window = {
+        let conn = db.conn.lock();
+        get_settle_window_seconds(&conn, "grokbuild", SETTLE_WINDOW_DEFAULT_SECS)
+    };
+
+    // 每事件一个事务 —— 避免大事件（几百个 token_count 行）单事务持锁太久
+    for (idx, event) in events.iter().enumerate() {
+        if now.saturating_sub(event.created_at) < settle_window {
+            deferred = true;
+            break;
+        }
+
+        for (model, turn) in &event.per_model {
+            if turn.input == 0 && turn.output == 0 && turn.cached == 0 {
+                continue;
             }
+            let turn_key = if event.prompt_id.is_empty() {
+                format!("idx{idx}")
+            } else {
+                event.prompt_id.clone()
+            };
+            let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
 
-            for (model, turn) in &event.per_model {
-                if turn.input == 0 && turn.output == 0 && turn.cached == 0 {
-                    continue;
-                }
-                let turn_key = if event.prompt_id.is_empty() {
-                    format!("idx{idx}")
-                } else {
-                    event.prompt_id.clone()
-                };
-                let request_id = format!("grok_session:{session_id}:{turn_key}:{model}");
+            // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
+            // 本地定价的取舍见 compute_costs 注释。用 per-model 的 cost_ticks
+            // 而非事件级求和，避免多模型 turn 的整单成本被每行重复计一次
+            let reported = if turn.cost_ticks > 0 {
+                Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64)
+            } else {
+                Decimal::ZERO
+            };
 
-                // CLI 自报成本（完整则 ground truth；costIsPartial 时只是下界）与
-                // 本地定价的取舍见 compute_costs 注释。用 per-model 的 cost_ticks
-                // 而非事件级求和，避免多模型 turn 的整单成本被每行重复计一次
-                let reported = if turn.cost_ticks > 0 {
-                    Decimal::from(turn.cost_ticks) / Decimal::from(10_000_000_000u64)
-                } else {
-                    Decimal::ZERO
-                };
+            let usage = TokenUsage {
+                input_tokens: turn.input,
+                output_tokens: turn.output,
+                cache_read_tokens: turn.cached,
+                cache_creation_tokens: 0,
+                model: Some(model.clone()),
+            };
 
-                let usage = TokenUsage {
-                    input_tokens: turn.input,
-                    output_tokens: turn.output,
-                    cache_read_tokens: turn.cached,
-                    cache_creation_tokens: 0,
-                    model: Some(model.clone()),
-                };
-                let pricing = find_model_pricing(conn, model);
+            // 单事件单事务 —— 失败不阻塞后续事件
+            let res = with_transaction(db, |conn| {
+                let pricing = find_model_pricing_cached(conn, model, &mut pricing_cache);
                 let multiplier = crate::usage::pricing::get_app_multiplier(conn, "grokbuild");
-                // 顶层 costIsPartial 覆盖整事件；per-model 标记再单独兜底该行
                 let (costs, total) = compute_costs(
                     pricing.as_ref(),
                     &usage,
@@ -129,8 +140,7 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                     event.cost_partial || turn.cost_partial,
                     multiplier,
                 );
-
-                let inserted = crate::usage::session_common::insert_request_log(
+                crate::usage::session_common::insert_request_log(
                     conn,
                     &request_id,
                     "grokbuild",
@@ -145,21 +155,27 @@ fn sync_single_grok_file(db: &UsageDb, file_path: &Path) -> Result<SessionSyncRe
                     Some(&session_id),
                     event.created_at,
                     crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-                )?;
-                if inserted {
-                    result.imported += 1;
-                } else {
+                    200i64,
+                    None,
+                    "pricing_estimated",
+                )
+            });
+            match res {
+                Ok(true) => result.imported += 1,
+                Ok(false) => result.skipped += 1,
+                Err(e) => {
+                    let m = format!("Grok Build 消息插入失败 {request_id}: {e:#}");
+                    eprintln!("[GROK-SYNC] {m}");
                     result.skipped += 1;
                 }
             }
         }
-        Ok(())
-    })?;
+    }
 
     if deferred {
         result.deferred_files += 1;
     } else {
-        update_sync_state(db, &file_path_str, file_modified, events.len() as i64)?;
+        update_sync_state(db, &file_path_str, file_modified, events.len() as i64, 0, 0)?;
     }
 
     Ok(result)
@@ -406,7 +422,7 @@ mod tests {
         std::fs::write(&file, &line).unwrap();
 
         let conn = Connection::open_in_memory().unwrap();
-        let db = UsageDb { conn: parking_lot::Mutex::new(conn) };
+        let db = UsageDb { conn: parking_lot::Mutex::new(conn), recovered_backup: std::sync::Mutex::new(None) };
         crate::usage::db::init_schema(&db).unwrap();
 
         let result = sync_single_grok_file(&db, &file).unwrap();

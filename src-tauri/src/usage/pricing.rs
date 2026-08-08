@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 /// 模型定价（每百万 token 的人民币价格，CNY）
@@ -102,6 +103,46 @@ pub fn input_includes_cache_read(app_type: &str) -> bool {
     CACHE_INCLUSIVE_APP_TYPES.contains(&app_type)
 }
 
+/// 读取 per-app settle_window（grokbuild 用），app_config 中 0 / 行不存在 = `default`
+pub fn get_settle_window_seconds(
+    conn: &rusqlite::Connection,
+    app_type: &str,
+    default: i64,
+) -> i64 {
+    let stored: i64 = conn
+        .query_row(
+            "SELECT settle_window_seconds FROM app_config WHERE app_type = ?1",
+            [app_type],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if stored > 0 {
+        stored
+    } else {
+        default
+    }
+}
+
+/// 读取 per-app incomplete_tolerance（opencode 用），0 / 行不存在 = `default`
+pub fn get_incomplete_tolerance_seconds(
+    conn: &rusqlite::Connection,
+    app_type: &str,
+    default: i64,
+) -> i64 {
+    let stored: i64 = conn
+        .query_row(
+            "SELECT incomplete_tolerance_seconds FROM app_config WHERE app_type = ?1",
+            [app_type],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if stored > 0 {
+        stored
+    } else {
+        default
+    }
+}
+
 /// 从 usage.db 查询模型定价；未找到则从内置 seed 表加载并尝试落库。
 pub fn find_model_pricing(
     conn: &rusqlite::Connection,
@@ -143,6 +184,22 @@ pub fn find_model_pricing(
             Some(seed.4)
         }
     }
+}
+
+/// 带缓存的 find_model_pricing —— 同步 session 内同一 model 可能被查数千次,
+/// 用 `&mut HashMap` 避免每次都走 SQL。第一次调用仍走 DB（命中后会落 seed）,后续命中缓存。
+/// 缓存 `Option<ModelPricing>`:None 也缓存,避免反复触发"查 DB → 查 seed 都失败"的路径。
+pub fn find_model_pricing_cached(
+    conn: &rusqlite::Connection,
+    model_id: &str,
+    cache: &mut HashMap<String, Option<ModelPricing>>,
+) -> Option<ModelPricing> {
+    if let Some(cached) = cache.get(model_id) {
+        return cached.clone();
+    }
+    let result = find_model_pricing(conn, model_id);
+    cache.insert(model_id.to_string(), result.clone());
+    result
 }
 
 /// 内置默认定价表：每一项 (model_prefix, input, output, cache_read, cache_creation)。
@@ -224,15 +281,41 @@ fn seed_pricing(
 }
 
 /// 批量写入所有内置默认定价（启动时调用，幂等）
+/// 阶段 1：插入新 model_id（用户库里没有的）
+/// 阶段 2：更新已有 seed 记录（display_name == model_id 视为「未自定义」）
+///         到最新价格 —— 用户改过 display_name 的记录保留不动。
 pub fn seed_default_pricing(conn: &rusqlite::Connection) -> Result<()> {
-    for (prefix, input, output, cache_read, cache_creation) in default_pricing_map() {
-        conn.execute(
+    let map = default_pricing_map();
+    let mut updated = 0u32;
+    let mut inserted = 0u32;
+    for (prefix, input, output, cache_read, cache_creation) in &map {
+        // 阶段 1：插入新（INSERT OR IGNORE：用户库里已有则跳过）
+        let n = conn.execute(
             "INSERT OR IGNORE INTO model_pricing (model_id, display_name,
                 input_cost_per_million, output_cost_per_million,
                 cache_read_cost_per_million, cache_creation_cost_per_million)
              VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![prefix, input, output, cache_read, cache_creation],
         )?;
+        inserted += n as u32;
+        // 阶段 2：更新「未自定义」的已有 seed 记录到最新价格
+        // 判断依据：display_name 仍等于 model_id（seed 写入时就是 model_id；
+        // 用户改过 display_name 后这条更新不会命中）。
+        let m = conn.execute(
+            "UPDATE model_pricing SET
+                input_cost_per_million = ?2,
+                output_cost_per_million = ?3,
+                cache_read_cost_per_million = ?4,
+                cache_creation_cost_per_million = ?5
+             WHERE model_id = ?1 AND display_name = ?1",
+            rusqlite::params![prefix, input, output, cache_read, cache_creation],
+        )?;
+        updated += m as u32;
+    }
+    if inserted > 0 || updated > 0 {
+        eprintln!(
+            "[PRICING] seed 初始化完成: 插入 {inserted} 条, 更新 {updated} 条"
+        );
     }
     Ok(())
 }
@@ -350,5 +433,48 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM model_pricing", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, default_pricing_map().len() as i64);
+    }
+
+    /// #40 验证 seed 更新机制：display_name 仍 == model_id 的行会被更新到最新价格；
+    /// display_name 已被用户改过的行不会被覆盖。
+    #[test]
+    fn test_seed_update_only_when_display_name_unchanged() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_pricing (
+                model_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                input_cost_per_million TEXT NOT NULL,
+                output_cost_per_million TEXT NOT NULL,
+                cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+                cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+            );",
+        )
+        .unwrap();
+        // 第一次 seed：插入全部默认值
+        seed_default_pricing(&conn).unwrap();
+        // 用户修改某个 seed 的价格 + display_name（视为已自定义）
+        conn.execute(
+            "UPDATE model_pricing SET input_cost_per_million='999', display_name='我的自定义' WHERE model_id='claude-sonnet-4'",
+            [],
+        ).unwrap();
+        // 模拟发布改了 seed 默认价：把 default_pricing_map 中 claude-sonnet-4 改一个不同的 input
+        // （实际实现是：seed 启动时直接读 default_pricing_map 的最新值，不需要动态改）
+        // 这里我们直接验证：再跑一次 seed_default_pricing，用户改过 display_name 的行不应被覆盖
+        seed_default_pricing(&conn).unwrap();
+        let custom_input: String = conn
+            .query_row(
+                "SELECT input_cost_per_million FROM model_pricing WHERE model_id='claude-sonnet-4'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(custom_input, "999", "display_name 已改的行不应被 seed 覆盖");
+        // 另一个未被用户改 display_name 的 seed,重新 seed 时若 default 改了应该被更新
+        // (此处不变,但仍是 display_name == model_id 的状态,确认不抛错)
+        let other_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM model_pricing WHERE display_name=model_id", [], |r| r.get(0))
+            .unwrap();
+        assert!(other_count > 0, "其它未被自定义的 seed 行应仍存在");
     }
 }

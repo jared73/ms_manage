@@ -1,32 +1,44 @@
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import type { UsageSummary } from "@/lib/ipc";
 
 export function UsageHero({ summary }: { summary: UsageSummary | null }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const cost = summary ? Number(summary.totalCost) : 0;
   const tokens = summary?.totalTokens ?? 0;
 
-  const formatTokens = (n: number): string => {
-    if (n >= 100_000_000) return `${t("usage.about")} ${(n / 100_000_000).toFixed(2)} ${t("usage.hundred_million")}`;
-    if (n >= 10_000) return `${t("usage.about")} ${(n / 10_000).toFixed(1)} ${t("usage.ten_thousand")}`;
-    return n.toLocaleString();
-  };
+  // 紧凑数字格式：zh 自动 "1.2万 / 1.2亿"，en 自动 "12K / 1.2M"
+  const compactFmt = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.language, {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }),
+    [i18n.language],
+  );
+  // 千分位数字：按 locale 自动加千分位（zh: 1,234；en: 1,234；de: 1.234）
+  const intFmt = useMemo(() => new Intl.NumberFormat(i18n.language), [i18n.language]);
+  // 货币：始终 CNY（定价表写死人民币）；按 locale 选小数点 / 千分位格式
+  const costFmt = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.language, {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      }),
+    [i18n.language],
+  );
+
+  const formatTokens = (n: number): string => compactFmt.format(n);
 
   const cards: { key: string; value: string; label: string; raw?: string }[] = [
-    { key: "cost", value: `¥${cost.toFixed(4)}`, label: t("usage.total_cost") },
-    { key: "tokens", value: formatTokens(tokens), label: t("usage.total_tokens"), raw: tokens.toLocaleString() },
-    { key: "requests", value: (summary?.requestCount ?? 0).toLocaleString(), label: t("usage.total_requests") },
+    { key: "cost", value: `¥${costFmt.format(cost)}`, label: t("usage.total_cost") },
+    { key: "tokens", value: formatTokens(tokens), label: t("usage.total_tokens"), raw: intFmt.format(tokens) },
+    { key: "requests", value: intFmt.format(summary?.requestCount ?? 0), label: t("usage.total_requests") },
     {
       key: "hitRate",
       value: summary ? `${((summary.cacheHitRate ?? 0) * 100).toFixed(1)}%` : "0%",
       label: t("usage.cache_hit_rate"),
-      raw: (summary?.totalCacheReadTokens ?? 0).toLocaleString(),
-    },
-    {
-      key: "failRate",
-      value: summary ? `${((summary.failureRate ?? 0) * 100).toFixed(2)}%` : "0%",
-      label: t("usage.failure_rate"),
-      raw: `${summary?.failedCount ?? 0} / ${summary?.requestCount ?? 0}`,
+      raw: intFmt.format(summary?.totalCacheReadTokens ?? 0),
     },
   ];
 

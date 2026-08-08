@@ -1,20 +1,30 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
   Server, Zap, Activity, Wrench, ChevronDown,
-  Share2, Plus, ArrowRight, Blocks,
+  Share2, Plus, ArrowRight, Blocks, Wallet, ArrowUpRight,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Section, EmptyHint } from "@/components/Section";
 import {
   getProxyStatus, getExposedTools,
   listServerStates, listSkills, appInfo,
+  getUsageSummary,
 } from "@/lib/ipc";
-import type { ServerState, Skill } from "@/lib/ipc";
+import type { ServerState, Skill, UsageSummary } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 
+// 今日 0 点的本地 epoch 秒（与 Usage 页 rangeToEpoch 对齐）
+function todayStartEpoch(): number {
+  const now = new Date();
+  return Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
+}
+
+const FAILURE_RATE_THRESHOLD = 0.2;
+
 export function Dashboard() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const nav = useNavigate();
   const [proxy, setProxy] = useState<(ReturnType<typeof getProxyStatus> extends Promise<infer T> ? T : never) | null>(null);
   const [servers, setServers] = useState<ServerState[]>([]);
@@ -22,11 +32,30 @@ export function Dashboard() {
   const [info, setInfo] = useState<{ version: string } | null>(null);
   const [exposedTools, setExposedTools] = useState<{ name: string; description?: string; __server: string }[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [todayUsage, setTodayUsage] = useState<UsageSummary | null>(null);
   // 初始加载标识：首屏未拉到数据时显示骨架，避免闪烁 0 值
   const [initialLoad, setInitialLoad] = useState(true);
   // 任一 IPC 失败时显示错误条 + 重试按钮 —— 之前 4 个 `.catch(() => null)` 把错误全吞了,
   // 用户看到的就是永远 "0" / "未运行",无法判断是后端坏了还是前端没拿到数据。
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 失败率告警只用 useRef 触发一次,避免 5s 轮询刷屏
+  const failureAlertedRef = useRef(false);
+
+  const compactFmt = useMemo(
+    () => new Intl.NumberFormat(i18n.language, { notation: "compact", maximumFractionDigits: 1 }),
+    [i18n.language],
+  );
+  const intFmt = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.language, {
+        maximumFractionDigits: 0,
+      }),
+    [i18n.language],
+  );
+  const costFmt = useMemo(
+    () => new Intl.NumberFormat(i18n.language, { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
+    [i18n.language],
+  );
 
   // 静态值（版本号）只取一次
   useEffect(() => {
@@ -47,13 +76,14 @@ export function Dashboard() {
       // 用 Promise.allSettled 而不是 Promise.all + .catch(()=>null):
       // 这样能区分「后端确实返回了空数组」和「IPC 抛了错」——
       // 空数组不显示错误条,但 IPC 失败必须显示并允许重试。
-      const [pr, sr, skr, , etr] = await Promise.allSettled([
+      const [pr, sr, skr, , etr, ur] = await Promise.allSettled([
         getProxyStatus(),
         listServerStates(),
         listSkills(),
         // getToolsTotal 因为 dashboard 不显示总数,跳过这只 IPC(0 extra round trip)
         Promise.resolve(0) as Promise<number>,
         getExposedTools(),
+        getUsageSummary(todayStartEpoch()),
       ]);
       const firstErr = [pr, sr, skr, etr].find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
       if (firstErr) {
@@ -65,11 +95,20 @@ export function Dashboard() {
       setServers(sr.status === "fulfilled" ? sr.value : []);
       setSkills(skr.status === "fulfilled" ? skr.value : []);
       setExposedTools(etr.status === "fulfilled" && Array.isArray(etr.value) ? etr.value : []);
+      const u = ur.status === "fulfilled" ? ur.value : null;
+      setTodayUsage(u);
+      // 失败率告警：今日失败率超 20% 触发一次 toast
+      if (u && u.requestCount > 0 && u.failureRate > FAILURE_RATE_THRESHOLD && !failureAlertedRef.current) {
+        failureAlertedRef.current = true;
+        toast.warning(t("dashboard.alert_high_failure_rate", {
+          rate: (u.failureRate * 100).toFixed(1),
+        }));
+      }
     } finally {
       inFlightRef.current = false;
       setInitialLoad(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
     const startTimer = () => {
@@ -142,6 +181,37 @@ export function Dashboard() {
           <button className="btn-ghost text-err" onClick={() => { void load(); }}>{t("dashboard.retry")}</button>
         </div>
       )}
+
+      {/* 今日用量迷你卡：3 项聚合 + 跳转 Usage */}
+      <div className="rounded-xl border border-border bg-bg-subtle">
+        <div className="flex items-center justify-between px-4 pt-3">
+          <div className="text-xs font-medium text-fg-muted">{t("dashboard.usage_mini_title")}</div>
+          <button
+            onClick={() => nav("/usage")}
+            className="flex items-center gap-1 text-2xs text-fg-muted hover:text-accent"
+          >
+            {t("dashboard.usage_mini_link")}
+            <ArrowUpRight size={12} />
+          </button>
+        </div>
+        <div className="grid grid-cols-3 divide-x divide-border px-2 py-3">
+          <MiniCell
+            icon={<Wallet size={14} />}
+            label={t("dashboard.today_cost")}
+            value={todayUsage ? (`¥${costFmt.format(Number(todayUsage.totalCost))}` as string) : dash("—")}
+            color="accent"
+          />
+          <MiniCell
+            label={t("dashboard.today_requests")}
+            value={todayUsage ? (intFmt.format(todayUsage.requestCount) as string) : dash("—")}
+          />
+          <MiniCell
+            label={t("dashboard.today_tokens")}
+            value={todayUsage ? (compactFmt.format(todayUsage.totalTokens) as string) : dash("—")}
+            sub={todayUsage ? (intFmt.format(todayUsage.totalTokens) as string) : undefined}
+          />
+        </div>
+      </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -271,7 +341,7 @@ function StatCard({ icon, label, value, accent, color = "fg" }: { icon: React.Re
   return (
     <div className="group relative overflow-hidden rounded-xl border border-border bg-bg-subtle p-4 transition-all hover:-translate-y-0.5 hover:shadow-md hover:shadow-accent/5">
       <div className="flex items-center gap-3">
-        <div className={`grid h-9 w-9 place-items-center rounded-lg ${c.bg} ${c.text} transition-colors`}>
+        <div className={`grid h-9 w-9 place-items-center rounded-lg ${c.bg} ${c.text} transition-colents`}>
           {icon}
         </div>
         <div>
@@ -279,6 +349,33 @@ function StatCard({ icon, label, value, accent, color = "fg" }: { icon: React.Re
           <div className={`mt-0.5 text-2xl font-bold tracking-tight ${accent ? "text-accent" : "text-fg"}`}>{value}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MiniCell({
+  icon,
+  label,
+  value,
+  sub,
+  color = "fg",
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  value: string | number;
+  sub?: string | number;
+  color?: "fg" | "accent";
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center px-3 py-1">
+      <div className="flex items-center gap-1.5 text-2xs text-fg-muted">
+        {icon}
+        {label}
+      </div>
+      <div className={`mt-0.5 text-lg font-bold tracking-tight ${color === "accent" ? "text-accent" : "text-fg"}`}>
+        {value}
+      </div>
+      {sub != null && <div className="text-2xs text-fg-muted/70">{sub}</div>}
     </div>
   );
 }

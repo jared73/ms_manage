@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download } from "lucide-react";
+import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download, X } from "lucide-react";
 import { toast } from "sonner";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -227,6 +227,22 @@ export function Settings() {
 
   const reloadSettings = useCallback(() => setReloadTick((n) => n + 1), []);
 
+  // usage_overrides 编辑防抖：连续输入只在停止 500ms 后写盘
+  const saveOverrideTimerRef = useRef<number | null>(null);
+  const updateOverride = useCallback((key: string, value: string) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, usage_overrides: { ...(prev.usage_overrides ?? {}), [key]: value } };
+      if (saveOverrideTimerRef.current) clearTimeout(saveOverrideTimerRef.current);
+      saveOverrideTimerRef.current = window.setTimeout(() => {
+        updateSettings(updated).catch((err) =>
+          toast.error(t("settings.save_failed", { msg: describeError(err) }) as string)
+        );
+      }, 500);
+      return updated;
+    });
+  }, [t]);
+
   // 加载 / 失败态显式提示 —— 否则 IPC 失败时整页空白,
   // 用户看不到「开机自启」开关在哪(就像这次报告的问题)。
   if (settingsLoading && !settingsLoadError && !settings) {
@@ -314,6 +330,45 @@ export function Settings() {
               />
             ))}
           </div>
+        </div>
+
+        {/* 使用统计数据源目录覆盖 */}
+        <div className="card space-y-3">
+          <div>
+            <h3 className="font-semibold">{t("settings.usage_overrides")}</h3>
+            <div className="text-xs text-fg-muted">{t("settings.usage_overrides_desc")}</div>
+          </div>
+          {([
+            { key: "opencode",  label: "OpenCode" },
+            { key: "claude",    label: "Claude Code" },
+            { key: "codex",     label: "Codex" },
+            { key: "gemini",    label: "Gemini" },
+            { key: "grokbuild", label: "Grok Build" },
+          ] as const).map(({ key, label }) => {
+            const current = settings?.usage_overrides?.[key] ?? "";
+            return (
+              <Row key={key} label={label}>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    className="input flex-1 font-mono text-xs"
+                    value={current}
+                    placeholder={t("settings.usage_override_placeholder") as string}
+                    onChange={(e) => updateOverride(key, e.target.value)}
+                  />
+                  {current !== "" && (
+                    <button
+                      className="btn-ghost p-1.5"
+                      title={t("settings.usage_override_reset") as string}
+                      onClick={() => updateOverride(key, "")}
+                    >
+                      <X className="icon-sm" />
+                    </button>
+                  )}
+                </div>
+              </Row>
+            );
+          })}
         </div>
 
         {/* 开机自启动 */}

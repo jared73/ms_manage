@@ -1,13 +1,13 @@
 use crate::usage::paths::UsagePaths;
-use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
+use crate::usage::pricing::{find_model_pricing_cached, TokenUsage, input_includes_cache_read, ModelPricing};
 use crate::usage::session_common::{
-    get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
+    get_sync_state, metadata_modified_nanos, update_sync_state, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// 同步 Claude Code 会话日志（~/.claude/projects/**/*.jsonl）
@@ -97,6 +97,10 @@ struct ParsedAssistantUsage {
     stop_reason: Option<String>,
     timestamp: Option<String>,
     session_id: Option<String>,
+    /// HTTP 状态码（0 表示识别到上游 error 字段）
+    status_code: i64,
+    /// 错误描述（上游 error.message 或 isApiErrorMessage 文本）
+    error_message: Option<String>,
 }
 
 /// 解析一行 JSONL 为 assistant 消息使用数据；非 assistant/无 usage 返回 None
@@ -107,6 +111,7 @@ fn parse_assistant_line(value: &serde_json::Value, session_id: Option<String>) -
     let message = value.get("message")?;
     let msg_id = message.get("id").and_then(|v| v.as_str())?;
     let usage = message.get("usage")?;
+    let (status_code, error_message) = extract_claude_error(message);
     Some(ParsedAssistantUsage {
         message_id: msg_id.to_string(),
         model: message.get("model").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
@@ -117,7 +122,40 @@ fn parse_assistant_line(value: &serde_json::Value, session_id: Option<String>) -
         stop_reason: message.get("stop_reason").and_then(|v| v.as_str()).map(str::to_string),
         timestamp: value.get("timestamp").and_then(|v| v.as_str()).map(str::to_string),
         session_id,
+        status_code,
+        error_message,
     })
+}
+
+/// 从 claude assistant message 节点识别上游错误。
+/// 识别规则：
+/// 1. `message.error` 非空对象/字符串 → status=0, error="<内容>"
+/// 2. `message.isApiErrorMessage == true` → status=0, error="api error message"
+fn extract_claude_error(message: &serde_json::Value) -> (i64, Option<String>) {
+    if let Some(err) = message.get("error") {
+        if !err.is_null() {
+            let msg = if let Some(s) = err.as_str() {
+                s.to_string()
+            } else if let Some(obj) = err.as_object() {
+                obj.get("message")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err.to_string())
+            } else {
+                err.to_string()
+            };
+            let trimmed = msg.chars().take(200).collect::<String>();
+            return (0, Some(trimmed));
+        }
+    }
+    if message
+        .get("isApiErrorMessage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return (0, Some("api error message".to_string()));
+    }
+    (200, None)
 }
 
 /// 判断新条目是否应替换已有条目（stop_reason 优先，其次 output_tokens 更大）
@@ -136,35 +174,36 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let metadata = fs::metadata(file_path).context("无法读取文件元数据")?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    let (last_modified, last_offset) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, last_offset, last_byte_offset, _) = get_sync_state(db, &file_path_str)?;
     if file_modified <= last_modified {
         return Ok((0, 0));
     }
 
-    let file = fs::File::open(file_path).context("无法打开文件")?;
-    let reader = BufReader::new(file);
+    // 按字节跳读：seek 到 last_byte_offset,再从那里按行读。
+    // 避免大 JSONL 文件每次同步都从头 BufReader::lines() 走到 last_offset 才能跳过。
+    let mut file = fs::File::open(file_path).context("无法打开文件")?;
+    file.seek(SeekFrom::Start(last_byte_offset as u64))
+        .context("seek 到 byte_offset 失败")?;
+    let mut reader = BufReader::new(file);
 
-    let mut line_offset: i64 = 0;
     let mut messages: HashMap<String, ParsedAssistantUsage> = HashMap::new();
     let mut current_session_id: Option<String> = None;
     let mut bad_lines: u32 = 0;
 
-    for line_result in reader.lines() {
-        line_offset += 1;
-        if line_offset <= last_offset {
+    let mut buf = String::new();
+    let mut new_byte_offset = last_byte_offset;
+    loop {
+        buf.clear();
+        let n = reader.read_line(&mut buf).context("读取文件行失败")?;
+        if n == 0 {
+            break; // EOF
+        }
+        new_byte_offset += n as i64;
+        let line = buf.trim();
+        if line.is_empty() {
             continue;
         }
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => {
-                bad_lines += 1;
-                continue;
-            }
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: serde_json::Value = match serde_json::from_str(&line) {
+        let value: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
                 bad_lines += 1;
@@ -191,41 +230,41 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         }
     }
 
+    // 单条 INSERT 失败不阻塞水位线推进 — 错误进 errors 数组,后续 sync 自然跳过(request_id 唯一约束)
     let mut imported = 0u32;
     let mut skipped = bad_lines;
-    let mut insert_failed = false;
+    let mut pricing_cache: std::collections::HashMap<String, Option<ModelPricing>> = std::collections::HashMap::new();
+    let conn = db.conn.lock();
+    for msg in messages.values() {
+        let has_billable = msg.input_tokens > 0 || msg.output_tokens > 0
+            || msg.cache_read_tokens > 0 || msg.cache_creation_tokens > 0;
+        if !has_billable {
+            continue;
+        }
+        let request_id = format!("claude_session:{}", msg.message_id);
 
-    with_transaction(db, |conn| {
-        for msg in messages.values() {
-            let has_billable = msg.input_tokens > 0 || msg.output_tokens > 0
-                || msg.cache_read_tokens > 0 || msg.cache_creation_tokens > 0;
-            if !has_billable {
-                continue;
-            }
-            let request_id = format!("claude_session:{}", msg.message_id);
-
-            match insert_claude_entry(conn, &request_id, msg) {
-                Ok(true) => imported += 1,
-                Ok(false) => skipped += 1,
-                Err(e) => {
-                    insert_failed = true;
-                    eprintln!("[CLAUDE-SYNC] 插入失败 ({}): {e:#}", msg.message_id);
-                    skipped += 1;
-                }
+        match insert_claude_entry(&conn, &request_id, msg, &mut pricing_cache) {
+            Ok(true) => imported += 1,
+            Ok(false) => skipped += 1,
+            Err(e) => {
+                eprintln!("[CLAUDE-SYNC] 插入失败 ({}): {e:#}", msg.message_id);
+                skipped += 1;
+                // 不 return Err —— 让水位线仍推进,避免下次同步重头
             }
         }
-        Ok(())
-    })?;
-
-    if insert_failed {
-        return Err(anyhow::anyhow!("Claude 会话文件部分插入失败: {}", file_path.display()));
     }
+    drop(conn);
 
-    update_sync_state(db, &file_path_str, file_modified, line_offset)?;
+    update_sync_state(db, &file_path_str, file_modified, last_offset, new_byte_offset, 0)?;
     Ok((imported, skipped))
 }
 
-fn insert_claude_entry(conn: &rusqlite::Connection, request_id: &str, msg: &ParsedAssistantUsage) -> Result<bool> {
+fn insert_claude_entry(
+    conn: &rusqlite::Connection,
+    request_id: &str,
+    msg: &ParsedAssistantUsage,
+    pricing_cache: &mut std::collections::HashMap<String, Option<ModelPricing>>,
+) -> Result<bool> {
     let created_at = msg
         .timestamp
         .as_deref()
@@ -246,7 +285,7 @@ fn insert_claude_entry(conn: &rusqlite::Connection, request_id: &str, msg: &Pars
         model: Some(msg.model.clone()),
     };
     let multiplier = crate::usage::pricing::get_app_multiplier(conn, "claude");
-    let (costs, total) = match find_model_pricing(conn, &msg.model) {
+    let (costs, total) = match find_model_pricing_cached(conn, &msg.model, &mut *pricing_cache) {
         Some(pricing) => {
             let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("claude"), multiplier);
             let t = c.total_cost.to_string();
@@ -261,8 +300,9 @@ fn insert_claude_entry(conn: &rusqlite::Connection, request_id: &str, msg: &Pars
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_token_semantics,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
-            latency_ms, status_code, session_id, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            latency_ms, status_code, error_message, session_id, is_streaming, cost_multiplier,
+            cost_source, created_at, data_source
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
         rusqlite::params![
             request_id,
             "_claude_session",
@@ -280,10 +320,12 @@ fn insert_claude_entry(conn: &rusqlite::Connection, request_id: &str, msg: &Pars
             costs.cache_creation_cost.to_string(),
             total,
             0i64,
-            200i64,
+            msg.status_code,
+            msg.error_message.as_deref(),
             msg.session_id.as_deref(),
             1i64,
             multiplier.to_string(),
+            "pricing_estimated",
             created_at,
             "session",
         ],
@@ -340,6 +382,8 @@ mod tests {
             stop_reason: None,
             timestamp: None,
             session_id: None,
+            status_code: 200,
+            error_message: None,
         };
         let with_stop_reason = ParsedAssistantUsage {
             output_tokens: 50,
@@ -354,6 +398,8 @@ mod tests {
                 stop_reason: None,
                 timestamp: None,
                 session_id: None,
+                status_code: 200,
+                error_message: None,
             }
         };
         assert!(should_replace(&existing, &with_stop_reason));

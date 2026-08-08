@@ -1,11 +1,12 @@
 use crate::usage::paths::UsagePaths;
-use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
+use crate::usage::pricing::{find_model_pricing_cached, TokenUsage, input_includes_cache_read, ModelPricing};
 use crate::usage::session_common::{
     get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
 use crate::usage::UsageDb;
 use anyhow::{Context, Result};
 use std::fs;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 /// 同步 Gemini 会话日志（~/.gemini/tmp/*/chats/session-*.json）
@@ -63,13 +64,15 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
     let metadata = fs::metadata(file_path).context("无法读取文件元数据")?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    let (last_modified, _) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, _, _, _) = get_sync_state(db, &file_path_str)?;
     if file_modified <= last_modified {
         return Ok((0, 0));
     }
 
-    let content = fs::read_to_string(file_path).context("无法读取文件")?;
-    let value: serde_json::Value = serde_json::from_str(&content).context("JSON 解析失败")?;
+    // 大 JSON 文件用 fs::read_to_string 一次性读入会爆内存,改成 serde_json::from_reader
+    // 流式解析 —— 边读边 parse,内存占用与单消息大小成正比。
+    let file = fs::File::open(file_path).context("无法打开文件")?;
+    let value: serde_json::Value = serde_json::from_reader(BufReader::new(file)).context("JSON 解析失败")?;
 
     let session_id = value.get("sessionId").and_then(|v| v.as_str()).map(str::to_string);
     let Some(messages) = value.get("messages").and_then(|m| m.as_array()) else {
@@ -78,6 +81,8 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
 
     let mut imported = 0u32;
     let mut skipped = 0u32;
+    let mut pricing_cache: std::collections::HashMap<String, Option<ModelPricing>> =
+        std::collections::HashMap::new();
 
     with_transaction(db, |conn| {
         for msg in messages {
@@ -107,7 +112,7 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
                 model: Some(data.model.clone()),
             };
             let multiplier = crate::usage::pricing::get_app_multiplier(conn, "gemini");
-            let (costs, total) = match find_model_pricing(conn, &data.model) {
+            let (costs, total) = match find_model_pricing_cached(conn, &data.model, &mut pricing_cache) {
                 Some(pricing) => {
                     let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("gemini"), multiplier);
                     let t = c.total_cost.to_string();
@@ -116,7 +121,7 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
                 None => (Default::default(), "0".to_string()),
             };
 
-            let inserted = crate::usage::session_common::insert_request_log(
+            let inserted = match crate::usage::session_common::insert_request_log(
                 conn,
                 &request_id,
                 "gemini",
@@ -131,7 +136,18 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
                 session_id.as_deref(),
                 created_at,
                 crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-            )?;
+                200i64,
+                None,
+                "pricing_estimated",
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    let m = format!("Gemini 消息插入失败 {request_id}: {e:#}");
+                    eprintln!("[GEMINI-SYNC] {m}");
+                    skipped += 1;
+                    continue;
+                }
+            };
             if inserted {
                 imported += 1;
             } else {
@@ -141,7 +157,7 @@ fn sync_single_gemini_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)>
         Ok(())
     })?;
 
-    update_sync_state(db, &file_path_str, file_modified, messages.len() as i64)?;
+    update_sync_state(db, &file_path_str, file_modified, messages.len() as i64, 0, 0)?;
     Ok((imported, skipped))
 }
 

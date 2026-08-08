@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
-import { Toaster } from "sonner";
+import { toast, Toaster } from "sonner";
 import { Layout } from "@/components/Layout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ToastSentinel } from "@/components/ToastSentinel";
@@ -14,7 +14,7 @@ import { Connections } from "@/pages/Connections";
 import { Settings } from "@/pages/Settings";
 import { Logs } from "@/pages/Logs";
 import { Usage } from "@/pages/Usage";
-import { getSettings } from "@/lib/ipc";
+import { getSettings, getUsageRecoveryStatus } from "@/lib/ipc";
 import { useApp } from "@/stores/app";
 
 export default function App() {
@@ -34,8 +34,22 @@ export default function App() {
         // 忽略：使用默认主题
       }
     })();
+    // 启动时检查 usage.db 是否经历过损坏恢复 —— 之前是静默 eprintln，
+    // 用户看到的就是"历史数据没了"，根本不知道为什么。toast 一次性告知。
+    void (async () => {
+      try {
+        const recovery = await getUsageRecoveryStatus();
+        if (recovery) {
+          toast.error(t("usage.recovered_backup", { path: recovery.backupPath }), {
+            duration: TOAST_DURATION * 4,
+          });
+        }
+      } catch {
+        /* 损坏恢复检查失败不致命,静默 */
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- i18n is stable
-  }, [setSettings]);
+  }, [setSettings, t]);
 
   return (
     <ErrorBoundary label={t("error_boundary.app_label")}>

@@ -33,3 +33,21 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
         .open_url(trimmed, None::<&str>)
         .map_err(|e| e.to_string())
 }
+
+/// 打开任意本地路径（文件用默认应用打开，目录用系统文件管理器）。
+/// 接受参数为用户从 UI 传入的 path（settings.usage_overrides / DataSourcesPanel），
+/// 不限于 state.data_dir。仍限制必须是绝对路径，避免相对路径绕过。
+#[tauri::command]
+pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
+    let p = std::path::PathBuf::from(trimmed);
+    if !p.is_absolute() {
+        return Err(format!("仅允许绝对路径, 收到:{trimmed}"));
+    }
+    app.opener()
+        .open_path(trimmed.to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}

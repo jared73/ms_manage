@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download } from "lucide-react";
-import { exportRequestLogsCsv, getRequestLogs, type PaginatedLogs } from "@/lib/ipc";
+import { save } from "@tauri-apps/plugin-dialog";
+import { exportRequestLogsCsv, getRequestLogs, writeCsvFile, type PaginatedLogs, type RequestLogRow } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 import { toast } from "sonner";
 import { EmptyHint } from "@/components/Section";
@@ -12,19 +13,86 @@ function fmtLatency(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function RequestLogTable({ startDate }: { startDate?: number }) {
-  const { t } = useTranslation();
+/** 渲染层使用的行：后端 row + 预解析的时间字符串（避免每行 render 都 new Date+toLocaleString） */
+interface DisplayRow extends RequestLogRow {
+  displayTime: string;
+}
+
+/** 单行组件 memo：仅当 r 引用或 costFmt 变时才重渲染 —— 自动刷新下避免整页 N×M 次 Date 计算 */
+const Row = memo(function Row({
+  r,
+  costFormatted,
+}: {
+  r: DisplayRow;
+  costFormatted: string;
+}) {
+  const failed = r.statusCode !== 200 || !!r.errorMessage;
+  return (
+    <tr
+      className={`border-b border-border ${failed ? "bg-red-500/5" : ""}`}
+      title={r.errorMessage ?? undefined}
+    >
+      <td className="py-1.5 pr-3 text-xs text-fg-muted">{r.displayTime}</td>
+      <td className="py-1.5 pr-3 text-xs">{r.appType}</td>
+      <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
+      <td className="py-1.5 pr-3 text-right text-xs">{r.inputTokens.toLocaleString()}</td>
+      <td className="py-1.5 pr-3 text-right text-xs">{r.outputTokens.toLocaleString()}</td>
+      <td className="py-1.5 pr-3 text-right text-xs">{fmtLatency(r.latencyMs)}</td>
+      <td className="py-1.5 pr-3 text-right text-xs">
+        <span className={failed ? "font-medium text-red-500" : "text-fg-muted"}>
+          {r.statusCode !== 200 ? `HTTP ${r.statusCode}` : r.errorMessage ? "ERR" : "OK"}
+        </span>
+      </td>
+      <td className="py-1.5 text-right text-xs">¥{costFormatted}</td>
+    </tr>
+  );
+});
+
+export function RequestLogTable({
+  startDate,
+  appFilter,
+  modelFilter,
+}: {
+  startDate?: number;
+  appFilter?: string;
+  modelFilter?: string;
+}) {
+  const { t, i18n } = useTranslation();
+  const costFmt = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.language, {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      }),
+    [i18n.language],
+  );
   const [data, setData] = useState<PaginatedLogs | null>(null);
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
   const pageSize = 20;
+
+  // 预解析 createdAt → displayTime（避免每行 render 都 new Date+toLocaleString）
+  const visibleRows = useMemo<DisplayRow[]>(() => {
+    const rows = data?.rows ?? [];
+    return rows.map((r) => ({
+      ...r,
+      displayTime: new Date(r.createdAt * 1000).toLocaleString(),
+    }));
+  }, [data]);
 
   const requestSeqRef = useRef(0);
 
   const load = useCallback(async () => {
     const reqId = ++requestSeqRef.current;
     try {
-      const result = await getRequestLogs({ startDate, page, pageSize });
+      const result = await getRequestLogs({
+        startDate,
+        // 空串 → undefined,避免后端 SQL 拼 "app_type = ''" 永远不匹配 (#17 回归 bug)
+        appType: appFilter || undefined,
+        model: modelFilter || undefined,
+        page,
+        pageSize,
+      });
       if (reqId !== requestSeqRef.current) return;
       setData(result);
       // 新数据返回后 clamp 页码，避免超出实际页数
@@ -36,7 +104,7 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
       if (reqId !== requestSeqRef.current) return;
       toast.error(describeError(e));
     }
-  }, [startDate, page]);
+  }, [startDate, appFilter, modelFilter, page]);
 
   useEffect(() => {
     void load();
@@ -44,19 +112,28 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
 
   useEffect(() => {
     setPage(1);
-  }, [startDate]);
+  }, [startDate, appFilter, modelFilter]);
 
   const doExport = async () => {
     setExporting(true);
     try {
-      const csv = await exportRequestLogsCsv(startDate);
-      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `usage-request-logs-${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // 1. 弹原生 save dialog 让用户选保存位置
+      const today = new Date().toISOString().slice(0, 10);
+      const target = await save({
+        title: t("usage.export_csv"),
+        defaultPath: `usage-request-logs-${today}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!target) return; // 用户取消
+      // 2. 拉 CSV 内容
+      const csv = await exportRequestLogsCsv(
+        startDate,
+        undefined,
+        appFilter || undefined,
+        modelFilter || undefined,
+      );
+      // 3. 让 Rust 端写文件(避免前端 tauri-plugin-fs 的 scope 限制)
+      await writeCsvFile(target, "\uFEFF" + csv);
       toast.success(t("usage.csv_exported"));
     } catch (e) {
       toast.error(describeError(e));
@@ -69,7 +146,7 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
 
   return (
     <div>
-      <div className="mb-2 flex justify-end">
+      <div className="mb-2 flex items-center justify-end">
         <button
           onClick={doExport}
           disabled={exporting || !data || data.total === 0}
@@ -79,7 +156,7 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
           {t("usage.export_csv")}
         </button>
       </div>
-      {!data || data.rows.length === 0 ? (
+      {!data || visibleRows.length === 0 ? (
         <EmptyHint>{t("usage.no_logs")}</EmptyHint>
       ) : (
         <table className="w-full text-sm">
@@ -96,31 +173,9 @@ export function RequestLogTable({ startDate }: { startDate?: number }) {
             </tr>
           </thead>
           <tbody>
-            {data?.rows.map((r) => {
-              const failed = r.statusCode !== 200 || !!r.errorMessage;
-              return (
-                <tr
-                  key={r.requestId}
-                  className={`border-b border-border ${failed ? "bg-red-500/5" : ""}`}
-                  title={r.errorMessage ?? undefined}
-                >
-                  <td className="py-1.5 pr-3 text-xs text-fg-muted">
-                    {new Date(r.createdAt * 1000).toLocaleString()}
-                  </td>
-                  <td className="py-1.5 pr-3 text-xs">{r.appType}</td>
-                  <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
-                  <td className="py-1.5 pr-3 text-right text-xs">{r.inputTokens.toLocaleString()}</td>
-                  <td className="py-1.5 pr-3 text-right text-xs">{r.outputTokens.toLocaleString()}</td>
-                  <td className="py-1.5 pr-3 text-right text-xs">{fmtLatency(r.latencyMs)}</td>
-                  <td className="py-1.5 pr-3 text-right text-xs">
-                    <span className={failed ? "font-medium text-red-500" : "text-fg-muted"}>
-                      {r.statusCode !== 200 ? `HTTP ${r.statusCode}` : r.errorMessage ? "ERR" : "OK"}
-                    </span>
-                  </td>
-                  <td className="py-1.5 text-right text-xs">¥{Number(r.totalCostUsd).toFixed(4)}</td>
-                </tr>
-              );
-            })}
+            {visibleRows.map((r) => (
+              <Row key={r.requestId} r={r} costFormatted={costFmt.format(Number(r.totalCostUsd))} />
+            ))}
           </tbody>
         </table>
       )}

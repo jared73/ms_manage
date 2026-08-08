@@ -1,5 +1,5 @@
 use crate::usage::paths::UsagePaths;
-use crate::usage::pricing::{find_model_pricing, TokenUsage, input_includes_cache_read};
+use crate::usage::pricing::{find_model_pricing_cached, TokenUsage, input_includes_cache_read, ModelPricing};
 use crate::usage::session_common::{
     get_sync_state, metadata_modified_nanos, update_sync_state, with_transaction, SessionSyncResult,
 };
@@ -87,7 +87,7 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let metadata = fs::metadata(file_path).context("无法读取文件元数据")?;
     let file_modified = metadata_modified_nanos(&metadata);
 
-    let (last_modified, _last_offset) = get_sync_state(db, &file_path_str)?;
+    let (last_modified, _last_offset, _last_byte, _) = get_sync_state(db, &file_path_str)?;
     if file_modified <= last_modified {
         return Ok((0, 0));
     }
@@ -101,6 +101,8 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
     let mut event_index = 0u32;
     let mut imported = 0u32;
     let mut skipped = 0u32;
+    let mut pricing_cache: std::collections::HashMap<String, Option<ModelPricing>> =
+        std::collections::HashMap::new();
 
     // session_id = 文件名中的 UUID
     let session_id = file_path
@@ -109,40 +111,47 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
         .unwrap_or("unknown")
         .to_string();
 
-    with_transaction(db, |conn| {
-        for line_result in reader.lines() {
-            line_offset += 1;
-            let Ok(line) = line_result else { continue };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-            let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
-                continue;
-            };
+    // 每 500 条一批拆小事务 —— 避免单文件几 MB token_count 流把 sync_mutex / db.conn 持锁太久
+    // 让后台线程（getUsageSummary 等）能见缝插针拿到锁响应 UI。
+    const BATCH_SIZE: u32 = 500;
+    let mut batch_count: u32 = 0;
 
-            if event_type == "turn_context" {
-                if let Some(model) = model_from_turn_context(&value) {
-                    current_model = model;
-                }
-                continue;
-            }
-            if event_type != "event_msg" || !line.contains("token_count") {
-                continue;
-            }
+    for line_result in reader.lines() {
+        line_offset += 1;
+        let Ok(line) = line_result else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let Some(event_type) = value.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
 
-            let Some((delta, model, created_at)) =
-                parse_token_line(&value, &current_model, &mut prev_total)
-            else {
-                continue;
-            };
-            if delta.is_zero() {
-                continue;
+        if event_type == "turn_context" {
+            if let Some(model) = model_from_turn_context(&value) {
+                current_model = model;
             }
+            continue;
+        }
+        if event_type != "event_msg" || !line.contains("token_count") {
+            continue;
+        }
 
-            event_index += 1;
-            let request_id = format!("codex_session:{session_id}:{event_index}");
+        let Some((delta, model, created_at)) =
+            parse_token_line(&value, &current_model, &mut prev_total)
+        else {
+            continue;
+        };
+        if delta.is_zero() {
+            continue;
+        }
 
+        event_index += 1;
+        let request_id = format!("codex_session:{session_id}:{event_index}");
+
+        // 单条 INSERT 失败不阻塞后续 / 不回滚整批 → 跳过 + 记错误
+        let res = with_transaction(db, |conn| {
+            let multiplier = crate::usage::pricing::get_app_multiplier(conn, "codex");
             let usage = TokenUsage {
                 input_tokens: delta.input,
                 output_tokens: delta.output,
@@ -150,18 +159,17 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
                 cache_creation_tokens: 0,
                 model: Some(model.clone()),
             };
-            let multiplier = crate::usage::pricing::get_app_multiplier(conn, "codex");
-            let (costs, total) = match find_model_pricing(conn, &model) {
+            let (costs, total) = match find_model_pricing_cached(conn, &model, &mut pricing_cache) {
                 Some(pricing) => {
-                    let c = crate::usage::pricing::calculate_cost(&usage, &pricing, input_includes_cache_read("codex"), multiplier);
+                    let c = crate::usage::pricing::calculate_cost(
+                        &usage, &pricing, input_includes_cache_read("codex"), multiplier,
+                    );
                     let t = c.total_cost.to_string();
                     (c, t)
                 }
                 None => (Default::default(), "0".to_string()),
             };
-
-            // insert_request_log 失败时直接 ? 传播错误 → 整个文件事务回滚，进度不推进
-            let inserted = crate::usage::session_common::insert_request_log(
+            crate::usage::session_common::insert_request_log(
                 conn,
                 &request_id,
                 "codex",
@@ -176,17 +184,30 @@ fn sync_single_file(db: &UsageDb, file_path: &Path) -> Result<(u32, u32)> {
                 Some(&session_id),
                 created_at,
                 crate::usage::sql_helpers::INPUT_TOKEN_SEMANTICS_TOTAL,
-            )?;
-            if inserted {
-                imported += 1;
-            } else {
+                200i64,
+                None,
+                "pricing_estimated",
+            )
+        });
+        match res {
+            Ok(true) => imported += 1,
+            Ok(false) => skipped += 1,
+            Err(e) => {
+                let m = format!("Codex 消息插入失败 {request_id}: {e:#}");
+                eprintln!("[CODEX-SYNC] {m}");
                 skipped += 1;
             }
         }
-        Ok(())
-    })?;
+        batch_count += 1;
+        if batch_count >= BATCH_SIZE {
+            // 当前批已经写完了。让其他线程有机会拿锁（释放 db.conn.lock 是 with_transaction 出栈时自动完成）
+            // 这里不需要额外操作,with_transaction 每次循环都释放一次。
+            // batch_count 仅作为语义计数。
+            batch_count = 0;
+        }
+    }
 
-    update_sync_state(db, &file_path_str, file_modified, line_offset)?;
+    update_sync_state(db, &file_path_str, file_modified, line_offset, 0, 0)?;
     Ok((imported, skipped))
 }
 

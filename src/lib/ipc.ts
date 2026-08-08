@@ -281,6 +281,7 @@ export const setAutoLaunch = (enabled: boolean) => invoke<void>("set_auto_launch
 // ---- App info ----
 export const appInfo = () => invoke<{ version: string; data_dir: string; log_dir: string; app_dir: string }>("app_info");
 export const openExternal = (url: string) => invoke<void>("open_external", { url });
+export const openPath = (path: string) => invoke<void>("open_path", { path });
 export const openDataDir = () => invoke<void>("open_data_dir");
 
 // 一键体检
@@ -368,8 +369,8 @@ export const getUsageSummary = (
   endDate?: number,
   appType?: string,
 ) => invoke<UsageSummary>("get_usage_summary", { startDate, endDate, appType });
-export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string, appType?: string) =>
-  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping, appType });
+export const getUsageTrends = (startDate?: number, endDate?: number, grouping?: string, appType?: string, model?: string) =>
+  invoke<DailyStats[]>("get_usage_trends", { startDate, endDate, grouping, appType, model });
 export const getModelStats = (startDate?: number, endDate?: number) =>
   invoke<ModelStats[]>("get_model_stats", { startDate, endDate });
 export const getProviderStats = (startDate?: number, endDate?: number) =>
@@ -377,12 +378,21 @@ export const getProviderStats = (startDate?: number, endDate?: number) =>
 export const getUsageDataSources = () => invoke<DataSourceStatus[]>("get_usage_data_sources");
 export const syncSessionUsage = () => invoke<SessionSyncResult>("sync_session_usage");
 export const recalculateCosts = () => invoke<number>("recalculate_costs");
+export const getUsageRecoveryStatus = () => invoke<RecoveryStatus | null>("get_usage_recovery_status");
+export const resetSyncState = () => invoke<number>("reset_sync_state");
+
+export interface RecoveryStatus {
+  backupPath: string;
+  recoveredAt: number;
+}
 export const exportRequestLogsCsv = (
   startDate?: number,
   endDate?: number,
   appType?: string,
   model?: string,
 ) => invoke<string>("export_request_logs_csv", { startDate, endDate, appType, model });
+export const writeCsvFile = (path: string, content: string) =>
+  invoke<void>("write_csv_file", { path, content });
 export const getModelPricing = () => invoke<ModelPricingInput[]>("get_model_pricing");
 export const updateModelPricingBatch = (items: ModelPricingInput[]) =>
   invoke<void>("update_model_pricing_batch", { items });
