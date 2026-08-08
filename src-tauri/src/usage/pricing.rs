@@ -240,7 +240,7 @@ pub fn default_pricing_map(
         ("k2.7", "6.5", "27", "1.3", "6.5"),
         ("k2.6", "6.5", "27", "1.3", "6.5"),
         // ── MiniMax（官方人民币价）──
-        ("MiniMax-M3", "4.2", "16.8", "0.84", "4.2"),
+        ("MiniMax-M3", "2.10", "8.40", "0.42", "2.10"),
         ("MiniMax-M2.7-highspeed", "4.2", "16.8", "0.42", "2.625"),
         ("MiniMax-M2.7", "2.1", "8.4", "0.42", "2.625"),
         // ── 小米 MiMo（官方人民币价）──
@@ -382,7 +382,7 @@ mod tests {
     fn test_seed_case_insensitive() {
         assert_eq!(seed_pricing("GLM-5.2").unwrap().0, "8");
         assert_eq!(seed_pricing("GLM-5.1-highspeed").unwrap().0, "6");
-        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "4.2");
+        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "2.10");
         assert_eq!(seed_pricing("DEEPSEEK-V4-FLASH").unwrap().0, "1");
         assert_eq!(seed_pricing("Kimi-K2.7-Code").unwrap().0, "6.5");
         assert_eq!(seed_pricing("claude-opus-4-8").unwrap().0, "36");
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(seed_pricing("grok-4.5-build").unwrap().0, "14.4");
         assert_eq!(seed_pricing("deepseek-v4-flash").unwrap().0, "1");
         assert_eq!(seed_pricing("k3").unwrap().0, "20");
-        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "4.2");
+        assert_eq!(seed_pricing("MiniMax-M3").unwrap().0, "2.10");
     }
 
     #[test]

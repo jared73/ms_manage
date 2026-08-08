@@ -199,7 +199,7 @@ pub fn recalculate_all_costs<F: FnMut(u32)>(
 
     let mut stmt = conn
         .prepare(
-            "SELECT request_id, app_type, model, input_tokens, output_tokens,
+            "SELECT request_id, app_type, model, provider_id, input_tokens, output_tokens,
                     cache_read_tokens, cache_creation_tokens, cost_multiplier
              FROM request_logs
              WHERE cost_source = 'pricing_estimated'",
@@ -207,8 +207,8 @@ pub fn recalculate_all_costs<F: FnMut(u32)>(
         .context("读取 request_logs 失败")?;
     let mut rows = stmt.query([]).context("查询 request_logs 失败")?;
 
-    // (request_id, input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost, pricing_model)
-    let mut pending: Vec<(String, String, String, String, String, String, String)> =
+    // (request_id, provider_id, app_type, model, input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost)
+    let mut pending: Vec<(String, String, String, String, String, String, String, String, String)> =
         Vec::with_capacity(BATCH_SIZE);
     let mut total = 0u32;
 
@@ -216,11 +216,12 @@ pub fn recalculate_all_costs<F: FnMut(u32)>(
         let request_id: String = row.get(0)?;
         let app_type: String = row.get(1)?;
         let model: String = row.get(2)?;
-        let input_tokens: u32 = row.get(3)?;
-        let output_tokens: u32 = row.get(4)?;
-        let cache_read_tokens: u32 = row.get(5)?;
-        let cache_creation_tokens: u32 = row.get(6)?;
-        let multiplier_str: String = row.get(7)?;
+        let provider_id: String = row.get(3)?;
+        let input_tokens: u32 = row.get(4)?;
+        let output_tokens: u32 = row.get(5)?;
+        let cache_read_tokens: u32 = row.get(6)?;
+        let cache_creation_tokens: u32 = row.get(7)?;
+        let multiplier_str: String = row.get(8)?;
 
         let Some(pricing) = crate::usage::pricing::find_model_pricing(&conn, &model) else {
             continue; // 无定价则跳过（保持原值）
@@ -243,12 +244,14 @@ pub fn recalculate_all_costs<F: FnMut(u32)>(
 
         pending.push((
             request_id,
+            provider_id,
+            app_type,
+            model,
             costs.input_cost.to_string(),
             costs.output_cost.to_string(),
             costs.cache_read_cost.to_string(),
             costs.cache_creation_cost.to_string(),
             costs.total_cost.to_string(),
-            model,
         ));
 
         if pending.len() >= BATCH_SIZE {
@@ -268,21 +271,23 @@ pub fn recalculate_all_costs<F: FnMut(u32)>(
 }
 
 /// 把一批重算结果通过 INSERT ... ON CONFLICT(request_id) DO UPDATE 一次性提交。
-/// pending 元素顺序：(request_id, input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost, pricing_model)
+/// pending 元素顺序：(request_id, provider_id, app_type, model, input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost)
+/// 注：必须显式补齐 provider_id / app_type / model 等 NOT NULL 列（schema 里没 DEFAULT），否则 SQLite 报 constraint failed。
 fn flush_recalc_batch(
     conn: &rusqlite::Connection,
-    pending: &[(String, String, String, String, String, String, String)],
+    pending: &[(String, String, String, String, String, String, String, String, String)],
 ) -> Result<u32> {
     if pending.is_empty() {
         return Ok(0);
     }
 
     let n = pending.len();
-    let placeholders = vec!["(?, ?, ?, ?, ?, ?, ?)"; n].join(", ");
+    let placeholders = vec!["(?, ?, ?, ?, ?, ?, ?, ?, ?)"; n].join(", ");
     let sql = format!(
         "INSERT INTO request_logs (
-            request_id, input_cost_usd, output_cost_usd, cache_read_cost_usd,
-            cache_creation_cost_usd, total_cost_usd, pricing_model
+            request_id, provider_id, app_type, model,
+            input_cost_usd, output_cost_usd, cache_read_cost_usd,
+            cache_creation_cost_usd, total_cost_usd
          ) VALUES {placeholders}
          ON CONFLICT(request_id) DO UPDATE SET
             input_cost_usd = excluded.input_cost_usd,
@@ -290,10 +295,10 @@ fn flush_recalc_batch(
             cache_read_cost_usd = excluded.cache_read_cost_usd,
             cache_creation_cost_usd = excluded.cache_creation_cost_usd,
             total_cost_usd = excluded.total_cost_usd,
-            pricing_model = excluded.pricing_model"
+            pricing_model = COALESCE(excluded.pricing_model, request_logs.pricing_model)"
     );
 
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(n * 7);
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(n * 9);
     for p in pending {
         params.push(Box::new(p.0.clone()));
         params.push(Box::new(p.1.clone()));
@@ -302,6 +307,8 @@ fn flush_recalc_batch(
         params.push(Box::new(p.4.clone()));
         params.push(Box::new(p.5.clone()));
         params.push(Box::new(p.6.clone()));
+        params.push(Box::new(p.7.clone()));
+        params.push(Box::new(p.8.clone()));
     }
 
     let updated = conn

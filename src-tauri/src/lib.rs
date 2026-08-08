@@ -39,6 +39,8 @@ use tauri::{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let start_minimized = std::env::args().any(|arg| arg == "--minimized");
+    // 改 default_pricing_map 后用这个 flag 触发启动时自动 recalculate，避免开发者改完源码忘了手动点 UI 重算
+    let recalculate_on_start = std::env::args().any(|arg| arg == "--recalculate-on-start");
     let state = Arc::new(AppState::initialize().expect("failed to init app state"));
     state.clone().install_as_current();
 
@@ -87,6 +89,29 @@ pub fn run() {
                     }
                 }
             });
+
+            // 改价后自动重算：只在 --recalculate-on-start flag 触发时跑
+            if recalculate_on_start {
+                let db = state.usage_db.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = tauri::async_runtime::spawn_blocking(move || {
+                        // 与后台 sync 互斥，避免重算期间新数据落库导致结果不一致
+                        let _guard = crate::usage::sync_mutex().lock();
+                        let recalculated =
+                            crate::usage::session_common::recalculate_all_costs(&db, |processed| {
+                                eprintln!("[RECALC] processed {processed} rows");
+                            })?;
+                        crate::usage::rollup::rebuild_rollups(&db)?;
+                        Ok::<u32, anyhow::Error>(recalculated)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(n)) => eprintln!("[RECALC] done, recalculated={n} rows"),
+                        Ok(Err(e)) => eprintln!("[RECALC] failed: {e:#}"),
+                        Err(e) => eprintln!("[RECALC] task join error: {e}"),
+                    }
+                });
+            }
 
             // usage 统计后台同步：启动立即跑一次，之后每 60 秒增量检查
             {
