@@ -371,3 +371,224 @@ fn flush_recalc_batch(
         .context("批量 UPSERT request_logs 费用失败")?;
     Ok(updated as u32)
 }
+
+#[cfg(test)]
+mod tests {
+    //! 防 NOT NULL bug 回归测试。
+    //!
+    //! flush_recalc_batch 用 `INSERT ... ON CONFLICT(request_id) DO UPDATE` 一次性提交；
+    //! INSERT 部分必须列全所有 NOT NULL 无 DEFAULT 列，否则 SQLite 报 constraint failed。
+    //! 历史上漏过 provider_id / app_type / model（c005afb 修），再漏 created_at（c8662dc 修）——
+    //! 这 4 个 test 强制覆盖 schema 变更后不能漏。
+    //!
+    //! 改 schema 加新 NOT NULL 无 DEFAULT 列时务必：
+    //! 1. 更新 `flush_recalc_batch` INSERT 列 + SELECT + pending tuple
+    //! 2. 在 test_flush_recalc_batch_upserts_with_all_not_null_columns 里加对应 INSERT 断言
+    //! 3. 跑 `cargo test recalculate` 验证
+
+    use super::*;
+    use crate::usage::pricing::CostBreakdown;
+    use crate::usage::UsageDb;
+    use parking_lot::Mutex;
+    use rust_decimal::Decimal;
+    use std::sync::Arc;
+
+    /// 与 stats.rs:557 setup_db 一致的最小 schema。
+    /// 不直接用 init_schema 是因为它会跑 seed_default_pricing（污染测试断言）。
+    /// 注意：只列 schema 必需的 NOT NULL 无 DEFAULT 列 —— 加新列时务必同步这里。
+    fn setup_db() -> Arc<UsageDb> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE request_logs (
+                request_id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_model TEXT,
+                pricing_model TEXT,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                input_token_semantics INTEGER NOT NULL DEFAULT 0,
+                input_cost_usd TEXT NOT NULL DEFAULT '0',
+                output_cost_usd TEXT NOT NULL DEFAULT '0',
+                cache_read_cost_usd TEXT NOT NULL DEFAULT '0',
+                cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
+                total_cost_usd TEXT NOT NULL DEFAULT '0',
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                first_token_ms INTEGER,
+                duration_ms INTEGER,
+                status_code INTEGER NOT NULL DEFAULT 200,
+                error_message TEXT,
+                session_id TEXT,
+                provider_type TEXT,
+                is_streaming INTEGER NOT NULL DEFAULT 1,
+                cost_multiplier TEXT NOT NULL DEFAULT '1.0',
+                cost_source TEXT NOT NULL DEFAULT 'pricing_estimated',
+                created_at INTEGER NOT NULL,
+                data_source TEXT NOT NULL DEFAULT 'session'
+            );
+            CREATE TABLE model_pricing (
+                model_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                input_cost_per_million TEXT NOT NULL,
+                output_cost_per_million TEXT NOT NULL,
+                cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
+                cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
+            );
+            INSERT INTO model_pricing (model_id, display_name, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million)
+            VALUES ('test-model', 'test-model', '10.0', '30.0', '1.0', '12.5');",
+        )
+        .unwrap();
+        Arc::new(UsageDb {
+            conn: Mutex::new(conn),
+            recovered_backup: std::sync::Mutex::new(None),
+        })
+    }
+
+    fn cost_zero() -> CostBreakdown {
+        CostBreakdown {
+            input_cost: Decimal::ZERO,
+            output_cost: Decimal::ZERO,
+            cache_read_cost: Decimal::ZERO,
+            cache_creation_cost: Decimal::ZERO,
+            total_cost: Decimal::ZERO,
+        }
+    }
+
+    /// 防回归: recalculate 后 pricing_estimated 行的 cost 列必须按当前 model_pricing 重算
+    #[test]
+    fn test_recalculate_updates_pricing_estimated_rows() {
+        let db = setup_db();
+        {
+            let conn = db.conn.lock();
+            // 插一条 cost=0 的 pricing_estimated 行
+            insert_request_log(
+                &conn, "req-1", "opencode", "test-model",
+                1000, 500, 0, 0,
+                &cost_zero(), "0", "1.0",
+                Some("sess-1"), 1700000000, 0, 200, None, "pricing_estimated",
+            ).unwrap();
+        }
+        // 跑 recalculate（cb 简单：no-op 进度回调）
+        let updated = recalculate_all_costs(&db, |_| {}).unwrap();
+        assert_eq!(updated, 1);
+
+        let conn = db.conn.lock();
+        let total: String = conn.query_row(
+            "SELECT total_cost_usd FROM request_logs WHERE request_id = 'req-1'",
+            [], |r| r.get(0),
+        ).unwrap();
+        // 1000 input * 10/1M + 500 output * 30/1M = 0.01 + 0.015 = 0.025
+        let parsed: f64 = total.parse().unwrap();
+        assert!((parsed - 0.025).abs() < 1e-9, "total_cost_usd 应为 0.025, 实际 {parsed}");
+    }
+
+    /// 防回归: session_reported 行 recalculate 后 cost 列不变
+    #[test]
+    fn test_recalculate_skips_session_reported_rows() {
+        let db = setup_db();
+        {
+            let conn = db.conn.lock();
+            // 插一条 session_reported 行（cost = 9.999，模拟上游自报）
+            insert_request_log(
+                &conn, "req-sr", "opencode", "test-model",
+                1000, 500, 0, 0,
+                &cost_zero(), "9.999", "1.0",
+                Some("sess-sr"), 1700000000, 0, 200, None, "session_reported",
+            ).unwrap();
+        }
+        let _ = recalculate_all_costs(&db, |_| {}).unwrap();
+
+        let conn = db.conn.lock();
+        let total: String = conn.query_row(
+            "SELECT total_cost_usd FROM request_logs WHERE request_id = 'req-sr'",
+            [], |r| r.get(0),
+        ).unwrap();
+        // session_reported 不动: 仍为 9.999
+        assert_eq!(total, "9.999", "session_reported 行 cost 不应被 recalculate 覆盖");
+    }
+
+    /// 防回归: cache_inclusive (codex/gemini/grokbuild) 用 billable_input = input - cache_read - cache_creation
+    #[test]
+    fn test_recalculate_handles_cache_inclusive_apps() {
+        let db = setup_db();
+        {
+            let conn = db.conn.lock();
+            // codex: input=1000, cache_read=200, cache_creation=100
+            // 非 cache_inclusive (opencode/claude): billable_input = input = 1000
+            // cache_inclusive (codex/gemini/grokbuild): billable_input = 1000 - 200 - 100 = 700
+            insert_request_log(
+                &conn, "req-open", "opencode", "test-model",
+                1000, 500, 200, 100,
+                &cost_zero(), "0", "1.0",
+                Some("s1"), 1700000000, 0, 200, None, "pricing_estimated",
+            ).unwrap();
+            insert_request_log(
+                &conn, "req-codex", "codex", "test-model",
+                1000, 500, 200, 100,
+                &cost_zero(), "0", "1.0",
+                Some("s2"), 1700000000, 0, 200, None, "pricing_estimated",
+            ).unwrap();
+        }
+        let _ = recalculate_all_costs(&db, |_| {}).unwrap();
+
+        let conn = db.conn.lock();
+        let total_open: String = conn.query_row(
+            "SELECT total_cost_usd FROM request_logs WHERE request_id = 'req-open'",
+            [], |r| r.get(0),
+        ).unwrap();
+        let total_codex: String = conn.query_row(
+            "SELECT total_cost_usd FROM request_logs WHERE request_id = 'req-codex'",
+            [], |r| r.get(0),
+        ).unwrap();
+
+        // opencode: 1000 input * 10/1M + 500 output * 30/1M + 200 cr * 1/1M + 100 cw * 12.5/1M
+        //        = 0.010 + 0.015 + 0.0002 + 0.00125 = 0.02645
+        let open_parsed: f64 = total_open.parse().unwrap();
+        assert!((open_parsed - 0.02645).abs() < 1e-9, "opencode total 应为 0.02645, 实际 {open_parsed}");
+
+        // codex (cache_inclusive): billable_input = 1000 - 200 - 100 = 700
+        // 700 input * 10/1M + 500 output * 30/1M + 200 cr * 1/1M + 100 cw * 12.5/1M
+        // = 0.007 + 0.015 + 0.0002 + 0.00125 = 0.02345
+        let codex_parsed: f64 = total_codex.parse().unwrap();
+        assert!((codex_parsed - 0.02345).abs() < 1e-9, "codex total 应为 0.02345, 实际 {codex_parsed}");
+    }
+
+    /// 防回归: flush_recalc_batch 必须能正确 UPSERT 所有 NOT NULL 无 DEFAULT 列
+    /// 历史上漏过 provider_id/app_type/model（c005afb 修），再漏 created_at（c8662dc 修）。
+    /// 这个测试断言 INSERT 后 provider_id/app_type/model/created_at 都正确保留。
+    #[test]
+    fn test_flush_recalc_batch_upserts_with_all_not_null_columns() {
+        let db = setup_db();
+        {
+            let conn = db.conn.lock();
+            insert_request_log(
+                &conn, "req-upsert", "opencode", "test-model",
+                100, 100, 0, 0,
+                &cost_zero(), "0", "1.0",
+                Some("sess-upsert"), 1700000000, 0, 200, None, "pricing_estimated",
+            ).unwrap();
+        }
+        // 跑 recalculate,触发 flush_recalc_batch 的 INSERT...ON CONFLICT DO UPDATE
+        let _ = recalculate_all_costs(&db, |_| {}).unwrap();
+
+        let conn = db.conn.lock();
+        // 断言 NOT NULL 列都正确（不被 None 覆盖、不被 NULL 破坏）
+        let (provider_id, app_type, model, created_at, total_cost): (String, String, String, i64, String) =
+            conn.query_row(
+                "SELECT provider_id, app_type, model, created_at, total_cost_usd
+                 FROM request_logs WHERE request_id = 'req-upsert'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            ).unwrap();
+        assert_eq!(provider_id, "_opencode_session", "provider_id 应保留原值");
+        assert_eq!(app_type, "opencode", "app_type 应保留原值");
+        assert_eq!(model, "test-model", "model 应保留原值");
+        assert_eq!(created_at, 1700000000, "created_at 应保留原值");
+        // cost 已被 recalculate 重算: 100*10/1M + 100*30/1M = 0.001 + 0.003 = 0.004
+        let cost_parsed: f64 = total_cost.parse().unwrap();
+        assert!((cost_parsed - 0.004).abs() < 1e-9, "total_cost 应为 0.004, 实际 {cost_parsed}");
+    }
+}
