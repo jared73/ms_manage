@@ -196,6 +196,28 @@ export interface ImportSkillResult {
 }
 export const importSkillFromPath = (path: string) => invoke<ImportSkillResult>("import_skill_from_path", { path });
 
+// ---- 扫描/导入外部已有 Skill（Claude Code / opencode / Cursor 等）----
+export interface ExternalSkillDto {
+  source: string;
+  path: string;
+  name: string;
+  description: string | null;
+  exists: boolean;
+}
+export interface ImportSelection {
+  path: string;
+  name: string;
+  overwrite: boolean;
+}
+export interface ImportExternalResult {
+  imported: string[];
+  skipped: string[];
+  errors: string[];
+}
+export const scanExternalSkills = () => invoke<ExternalSkillDto[]>("scan_external_skills");
+export const importExternalSkills = (selections: ImportSelection[]) =>
+  invoke<ImportExternalResult>("import_external_skills", { selections });
+
 // ---- 全局记忆文件 ----
 export interface Memory {
   id: string;

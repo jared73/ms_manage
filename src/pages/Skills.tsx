@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search, LayoutGrid, List } from "lucide-react";
+import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search, LayoutGrid, List, Loader2 } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
@@ -15,9 +15,10 @@ import {
   listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir,
   listSkillTargets, toggleSkillTarget, addSkillTarget, removeSkillTarget, updateSkillTarget,
   importSkillFromPath, parseSkillFrontmatter,
+  scanExternalSkills, importExternalSkills,
 } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
-import type { Skill, SkillTarget } from "@/lib/ipc";
+import type { Skill, SkillTarget, ExternalSkillDto } from "@/lib/ipc";
 
 export function Skills() {
   const { t } = useTranslation();
@@ -27,6 +28,7 @@ export function Skills() {
   const [targets, setTargets] = useState<SkillTarget[]>(([]));
   const [addTargetOpen, setAddTargetOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // 自由文本搜索:过滤 name/description,大小写不敏感。
   // Skills 数量一般 < 50,在前端过滤就够了;不需要走 IPC。
@@ -201,6 +203,9 @@ export function Skills() {
             </div>
             <button className="btn-ghost" onClick={() => setImportModalOpen(true)} title={t("skills.import_tooltip") as string}>
               <Upload className="icon-sm"/>{t("skills.import_btn")}
+            </button>
+            <button className="btn-ghost" onClick={() => setScanModalOpen(true)} title={t("skills.scan_external_tooltip") as string}>
+              <FileSearch className="icon-sm"/>{t("skills.scan_external_btn")}
             </button>
             <button className="btn-ghost" onClick={() => openDataDir()} title={t("skills.open_data_dir_tooltip") as string}>
               <FolderOpen className="icon-sm"/>{t("skills.data_dir_btn")}
@@ -379,6 +384,12 @@ export function Skills() {
         <ImportModal
           onClose={() => setImportModalOpen(false)}
           onImported={async () => { setImportModalOpen(false); await load(); }}
+        />
+      )}
+      {scanModalOpen && (
+        <ScanExternalModal
+          onClose={() => setScanModalOpen(false)}
+          onImported={async () => { setScanModalOpen(false); await load(); }}
         />
       )}
 
@@ -808,5 +819,123 @@ function listenSkillImportProgress(
   return tauriListen<{ path: string; stage: string; message: string }>(
     "skill_import_progress",
     (e) => onMsg(e.payload),
+  );
+}
+
+/** 扫描外部 Skill 弹窗：列出 Claude/opencode/Cursor 等目录里已有的 skill，勾选导入 */
+function ScanExternalModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> }) {
+  const { t } = useTranslation();
+  const [results, setResults] = useState<ExternalSkillDto[] | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await scanExternalSkills();
+        if (cancelled) return;
+        setResults(r);
+        // 默认勾选所有"新发现"（不勾已存在）
+        setChecked(new Set(r.filter((x) => !x.exists).map((x) => x.path)));
+      } catch (e) {
+        toast.error(describeError(e));
+        if (!cancelled) onClose();
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (path: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const doImport = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const selections = (results ?? [])
+        .filter((r) => checked.has(r.path))
+        .map((r) => ({ path: r.path, name: r.name, overwrite: r.exists }));
+      if (selections.length === 0) { setBusy(false); return; }
+      const r = await importExternalSkills(selections);
+      if (r.errors.length > 0) {
+        toast.error(`${t("skills.scan_import_partial")}: ${r.errors.join("; ")}`);
+      } else {
+        toast.success(t("skills.scan_imported", { n: r.imported.length }));
+      }
+      await onImported();
+    } catch (e) {
+      toast.error(describeError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open title={t("skills.scan_external_title")} onClose={onClose}>
+      <div className="min-w-[480px] max-w-[640px]">
+        {results === null ? (
+          <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
+            <Loader2 className="icon-sm animate-spin" />
+            {t("skills.scan_scanning")}
+          </div>
+        ) : results.length === 0 ? (
+          <div className="py-8 text-center text-sm text-fg-muted">
+            <FileSearch className="icon-lg mx-auto mb-2 opacity-50" />
+            {t("skills.scan_empty")}
+          </div>
+        ) : (
+          <>
+            <div className="max-h-[50vh] space-y-1 overflow-auto">
+              {results.map((r) => (
+                <label
+                  key={r.path}
+                  className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border bg-bg-subtle px-3 py-2 hover:bg-overlay-soft"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked.has(r.path)}
+                    onChange={() => toggle(r.path)}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="truncate font-medium">{r.name}</span>
+                      {r.exists && (
+                        <span className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-2xs text-warn">
+                          {t("skills.scan_exists")}
+                        </span>
+                      )}
+                    </div>
+                    {r.description && (
+                      <div className="mt-0.5 truncate text-xs text-fg-muted">{r.description}</div>
+                    )}
+                    <div className="mt-0.5 text-2xs text-fg-muted/70">
+                      {t("skills.scan_source")}: {r.source}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <span className="mr-auto text-xs text-fg-muted">
+                {t("skills.scan_selected", { n: checked.size })}
+              </span>
+              <button className="btn-ghost" onClick={onClose}>{t("common.cancel")}</button>
+              <button className="btn-primary" onClick={doImport} disabled={busy || checked.size === 0}>
+                {busy ? <Loader2 className="icon-sm animate-spin" /> : <Plus className="icon-sm" />}
+                {t("skills.scan_import_btn", { n: checked.size })}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
