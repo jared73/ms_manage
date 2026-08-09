@@ -1,7 +1,9 @@
 import { Outlet, NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useEffect, useState } from "react";
 import { LayoutGrid, TerminalSquare, Zap, BookOpen, Share2, ClipboardList, SlidersHorizontal, ChartColumn } from "lucide-react";
 import { clsx } from "clsx";
+import { appInfo } from "@/lib/ipc";
 
 interface NavItem {
   to: string;
@@ -23,6 +25,12 @@ const items: NavItem[] = [
 
 export function Layout() {
   const { t } = useTranslation();
+  const [version, setVersion] = useState<string>("");
+  useEffect(() => {
+    appInfo()
+      .then((i) => setVersion(i.version))
+      .catch(() => {});
+  }, []);
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-bg-subtle">
@@ -59,7 +67,7 @@ export function Layout() {
           ))}
         </nav>
         <div className="border-t border-border px-4 py-3 text-2xs text-fg-muted">
-          v{__APP_VERSION__ ?? "1.5.0"}
+          v{version}
         </div>
       </aside>
       <main className="flex-1 overflow-auto">
