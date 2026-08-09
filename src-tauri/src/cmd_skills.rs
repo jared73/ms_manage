@@ -573,3 +573,258 @@ mod validate_skill_path_tests {
         }
     }
 }
+
+// =====================================================================
+// 扫描并导入外部已有 Skill（Claude Code / opencode / Cursor / skill_targets）
+// 设计见 .trellis/tasks/08-09-scan-external-skills/prd.md
+// =====================================================================
+
+/// 扫描结果里的一条外部 skill
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSkillDto {
+    pub source: String,           // 来源标签（claude / opencode / target 名）
+    pub path: String,             // 外部 skill 目录绝对路径
+    pub name: String,
+    pub description: Option<String>,
+    pub exists: bool,             // ms_manage skills 目录是否已有同名
+}
+
+/// 用户勾选的导入项
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSelection {
+    pub path: String,
+    pub name: String,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// 扫描外部 skill 目录，返回发现的 skill（不含 ms_manage 自己发布的 symlink）
+#[tauri::command]
+pub fn scan_external_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<ExternalSkillDto>, String> {
+    let home = dirs::home_dir().ok_or("无法获取 HOME 目录")?;
+    let existing: std::collections::HashSet<String> = {
+        let dir = state.storage.skills_dir();
+        std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // 扫描源：内置已知路径 + 已配置 skill_targets
+    let mut sources: Vec<(String, std::path::PathBuf)> = vec![
+        ("claude".to_string(), home.join(".claude/skills")),
+        ("opencode".to_string(), home.join(".config/opencode/skill")),
+        ("codex".to_string(), home.join(".codex")),
+        ("cursor".to_string(), home.join(".cursor/skills")),
+        ("gemini".to_string(), home.join(".gemini/skills")),
+    ];
+    if let Ok(settings) = state.storage.load_settings() {
+        for t in &settings.skill_targets {
+            if t.enabled {
+                sources.push((t.name.clone(), std::path::PathBuf::from(&t.path)));
+            }
+        }
+    }
+
+    let mut out: Vec<ExternalSkillDto> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (label, dir) in sources {
+        if !dir.is_dir() { continue; } // 静默跳过不存在的目录
+        for entry in std::fs::read_dir(&dir).map_err(|e| format!("读取 {label} 目录失败: {e}"))?.flatten() {
+            let p = entry.path();
+            if !p.is_dir() { continue; }
+            // 排除 ms_manage 发布的 symlink（外部目录里指向 ms_manage skills 的软链）
+            if crate::symlink::is_link(&p) { continue; }
+            if !p.join("SKILL.md").is_file() { continue; } // 目录制识别
+
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            if name.is_empty() || !seen.insert(name.clone()) { continue; } // 去重
+
+            let description = std::fs::read_to_string(p.join("SKILL.md"))
+                .ok()
+                .and_then(|c| {
+                    let (fm, _) = crate::storage::skills::split_frontmatter(&c);
+                    serde_yaml::from_str::<serde_yaml::Value>(&fm).ok().and_then(|v| {
+                        v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string())
+                    })
+                });
+
+            out.push(ExternalSkillDto {
+                source: label.clone(),
+                path: p.to_string_lossy().to_string(),
+                name: name.clone(),
+                description,
+                exists: existing.contains(&name),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// 导入用户勾选的外部 skill（复制到 ms_manage skills 目录 + reconcile）
+#[tauri::command]
+pub fn import_external_skills(
+    selections: Vec<ImportSelection>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value, String> {
+    let skills_dir = state.storage.skills_dir();
+    std::fs::create_dir_all(&skills_dir).map_err(|e| format!("create skills dir: {e}"))?;
+
+    let mut imported: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for sel in &selections {
+        let src = std::path::PathBuf::from(&sel.path);
+        if !src.is_dir() || !src.join("SKILL.md").is_file() {
+            errors.push(format!("{}: 源目录无效或缺少 SKILL.md", sel.name));
+            continue;
+        }
+        let safe_name = sanitize_for_filename(&sel.name);
+        let dest = skills_dir.join(&safe_name);
+        if dest.exists() {
+            if !sel.overwrite {
+                skipped.push(sel.name.clone());
+                continue;
+            }
+            std::fs::remove_dir_all(&dest).map_err(|e| format!("删除旧目录失败: {e}"))?;
+        }
+        if let Err(e) = copy_dir_recursive(&src, &dest) {
+            errors.push(format!("{}: 复制失败 {e}", sel.name));
+        } else {
+            imported.push(sel.name.clone());
+        }
+    }
+
+    // 导入后 reconcile symlinks（保持各 target 一致）
+    if let Err(e) = crate::storage::skills::reconcile_after_change(&state.storage) {
+        crate::proxy::log_event("error", "skills", format!("外部 skill 导入后同步失败：{e}"), None);
+    }
+
+    Ok(serde_json::json!({
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+    }))
+}
+
+#[cfg(test)]
+mod scan_external_tests {
+    //! scan_external_skills / import_external_skills 的核心逻辑单测。
+    //! 不依赖 Storage：直接测目录识别 / symlink 排除 / frontmatter 解析 / 复制。
+
+    use super::*;
+    use std::fs;
+
+    fn make_skill_dir(root: &std::path::Path, name: &str, description: Option<&str>) -> std::path::PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        let front = match description {
+            Some(d) => format!("---\nname: {name}\ndescription: {d}\n---\n\n# {name}\n"),
+            None => format!("# {name}\n\nNo frontmatter.\n"),
+        };
+        fs::write(dir.join("SKILL.md"), front).unwrap();
+        dir
+    }
+
+    /// 用临时目录模拟外部扫描源，返回 (root, sources)
+    fn setup_scan_sources() -> (tempfile::TempDir, Vec<(String, std::path::PathBuf)>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        fs::create_dir_all(&claude).unwrap();
+        make_skill_dir(&claude, "my-skill-a", Some("desc A"));
+        make_skill_dir(&claude, "my-skill-b", None);
+        (tmp, vec![("claude".to_string(), claude)])
+    }
+
+    #[test]
+    fn test_scan_detects_skill_dirs() {
+        let (tmp, sources) = setup_scan_sources();
+        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (label, dir) in sources {
+            if !dir.is_dir() { continue; }
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let p = entry.path();
+                if !p.is_dir() || crate::symlink::is_link(&p) || !p.join("SKILL.md").is_file() { continue; }
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                if name.is_empty() || !seen.insert(name.clone()) { continue; }
+                let description = fs::read_to_string(p.join("SKILL.md")).ok().and_then(|c| {
+                    let (fm, _) = crate::storage::skills::split_frontmatter(&c);
+                    serde_yaml::from_str::<serde_yaml::Value>(&fm).ok()
+                        .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()))
+                });
+                out.push(ExternalSkillDto {
+                    source: label.clone(),
+                    path: p.to_string_lossy().to_string(),
+                    name: name.clone(),
+                    description,
+                    exists: existing.contains(&name),
+                });
+            }
+        }
+        assert_eq!(out.len(), 2, "应识别 2 个 skill 目录");
+        let a = out.iter().find(|s| s.name == "my-skill-a").unwrap();
+        assert_eq!(a.description.as_deref(), Some("desc A"), "frontmatter description 应解析");
+        let b = out.iter().find(|s| s.name == "my-skill-b").unwrap();
+        assert!(b.description.is_none(), "无 frontmatter 降级为 None");
+        drop(tmp);
+    }
+
+    #[test]
+    fn test_scan_skips_symlink() {
+        let (tmp, sources) = setup_scan_sources();
+        // 加一个 symlink（模拟 ms_manage 发布到外部目录的链接）
+        #[cfg(windows)]
+        let link_ok = {
+            let target = tmp.path().join("claude/my-skill-a");
+            let link = tmp.path().join("claude/published-link");
+            std::os::windows::fs::symlink_dir(&target, &link).is_ok()
+        };
+        #[cfg(not(windows))]
+        let link_ok = {
+            let target = tmp.path().join("claude/my-skill-a");
+            let link = tmp.path().join("claude/published-link");
+            std::os::unix::fs::symlink(&target, &link).is_ok()
+        };
+        if !link_ok { return; } // Windows 无 symlink 权限则跳过
+
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut names = Vec::new();
+        for (_, dir) in &sources {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                let p = entry.path();
+                if !p.is_dir() || crate::symlink::is_link(&p) { continue; }
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                if name.is_empty() || !seen.insert(name.clone()) { continue; }
+                names.push(name);
+            }
+        }
+        assert!(!names.contains(&"published-link".to_string()), "symlink 应被排除");
+        drop(tmp);
+    }
+
+    #[test]
+    fn test_import_copies_and_overwrites() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = make_skill_dir(&tmp.path(), "ext-skill", Some("ext desc"));
+        let dest_root = tmp.path().join("skills");
+        // 先导入一次
+        let dest1 = install_skill_dir(src.clone(), &dest_root).unwrap();
+        assert_eq!(dest1, "ext-skill");
+        assert!(dest_root.join("ext-skill/SKILL.md").is_file());
+        // 已存在 + 覆盖：install_skill_dir 内部先删旧再复制
+        let dest2 = install_skill_dir(src, &dest_root).unwrap();
+        assert_eq!(dest2, "ext-skill");
+        assert!(dest_root.join("ext-skill/SKILL.md").is_file());
+        drop(tmp);
+    }
+}

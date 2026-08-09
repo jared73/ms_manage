@@ -242,6 +242,8 @@ pub fn run() {
             cmd_skills::remove_skill_target,
             cmd_skills::update_skill_target,
             cmd_skills::import_skill_from_path,
+            cmd_skills::scan_external_skills,
+            cmd_skills::import_external_skills,
             cmd_memories::list_memories,
             cmd_memories::get_memory,
             cmd_memories::upsert_memory,
