@@ -101,7 +101,7 @@ pub fn run() {
                             crate::usage::session_common::recalculate_all_costs(&db, |processed| {
                                 eprintln!("[RECALC] processed {processed} rows");
                             })?;
-                        crate::usage::rollup::rebuild_rollups(&db)?;
+                        crate::usage::rollup::rebuild_rollups_incremental(&db, 0)?;
                         Ok::<u32, anyhow::Error>(recalculated)
                     })
                     .await;

@@ -344,8 +344,8 @@ pub async fn recalculate_costs(
             let _ = app_for_progress.emit("usage://recalc-progress", processed);
         })
         .cmd_err()?;
-        // 重算后重建 rollup
-        crate::usage::rollup::rebuild_rollups(&db).cmd_err()?;
+        // 重算后增量重建 rollup（仅最近 7 天 + 受影响日期）—— 替代全表 DELETE+INSERT
+        crate::usage::rollup::rebuild_rollups_incremental(&db, 0).cmd_err()?;
         Ok(recalculated)
     })
     .await
