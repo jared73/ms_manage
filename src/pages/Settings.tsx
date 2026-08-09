@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download, X } from "lucide-react";
+import { FolderOpen, RefreshCw, Power, Stethoscope, CheckCircle2, AlertTriangle, XCircle, Loader2, Copy, Check, Download, ChevronDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -332,44 +332,49 @@ export function Settings() {
           </div>
         </div>
 
-        {/* 使用统计数据源目录覆盖 */}
-        <div className="card space-y-3">
-          <div>
-            <h3 className="font-semibold">{t("settings.usage_overrides")}</h3>
-            <div className="text-xs text-fg-muted">{t("settings.usage_overrides_desc")}</div>
+        {/* 使用统计数据源目录覆盖（高级设置，默认折叠 — 普通用户 0 价值） */}
+        <details className="card group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
+            <div>
+              <h3 className="font-semibold">{t("settings.usage_overrides")}</h3>
+              <div className="text-xs text-fg-muted">{t("settings.usage_overrides_desc")}</div>
+            </div>
+            <ChevronDown className="icon-sm text-fg-muted transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-3 space-y-3">
+            {([
+              { key: "opencode",  label: "OpenCode" },
+              { key: "claude",    label: "Claude Code" },
+              { key: "codex",     label: "Codex" },
+              { key: "gemini",    label: "Gemini" },
+              { key: "grokbuild", label: "Grok Build" },
+            ] as const).map(({ key, label }) => {
+              const current = settings?.usage_overrides?.[key] ?? "";
+              return (
+                <Row key={key} label={label}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      className="input flex-1 font-mono text-xs"
+                      value={current}
+                      placeholder={t("settings.usage_override_placeholder") as string}
+                      onChange={(e) => updateOverride(key, e.target.value)}
+                    />
+                    {current !== "" && (
+                      <button
+                        className="btn-ghost p-1.5"
+                        title={t("settings.usage_override_reset") as string}
+                        onClick={() => updateOverride(key, "")}
+                      >
+                        <X className="icon-sm" />
+                      </button>
+                    )}
+                  </div>
+                </Row>
+              );
+            })}
           </div>
-          {([
-            { key: "opencode",  label: "OpenCode" },
-            { key: "claude",    label: "Claude Code" },
-            { key: "codex",     label: "Codex" },
-            { key: "gemini",    label: "Gemini" },
-            { key: "grokbuild", label: "Grok Build" },
-          ] as const).map(({ key, label }) => {
-            const current = settings?.usage_overrides?.[key] ?? "";
-            return (
-              <Row key={key} label={label}>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    className="input flex-1 font-mono text-xs"
-                    value={current}
-                    placeholder={t("settings.usage_override_placeholder") as string}
-                    onChange={(e) => updateOverride(key, e.target.value)}
-                  />
-                  {current !== "" && (
-                    <button
-                      className="btn-ghost p-1.5"
-                      title={t("settings.usage_override_reset") as string}
-                      onClick={() => updateOverride(key, "")}
-                    >
-                      <X className="icon-sm" />
-                    </button>
-                  )}
-                </div>
-              </Row>
-            );
-          })}
-        </div>
+        </details>
 
         {/* 开机自启动 */}
         <div className="card space-y-3">
