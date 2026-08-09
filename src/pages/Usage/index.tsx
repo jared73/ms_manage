@@ -298,7 +298,7 @@ export function Usage() {
           <ChevronDown size={16} className={`text-fg-muted transition-transform ${pricingOpen ? "rotate-180" : ""}`} />
         </button>
         <div id="pricing-content" className={`border-t border-border p-4 ${pricingOpen ? "block" : "hidden"}`}>
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex items-center gap-3">
             <button
               onClick={doRecalc}
               disabled={recalcBusy}
@@ -312,6 +312,16 @@ export function Usage() {
                   : t("usage.recalc_running")
                 : t("usage.recalc")}
             </button>
+            {recalcBusy && (
+              <div
+                className="h-1 flex-1 overflow-hidden rounded bg-bg-subtle"
+                title={recalcProgress !== null ? `${recalcProgress} rows processed` : undefined}
+                role="progressbar"
+                aria-label={t("usage.recalc") as string}
+              >
+                <div className="h-full w-1/3 animate-pulse bg-accent" />
+              </div>
+            )}
           </div>
           <PricingPanel />
         </div>
