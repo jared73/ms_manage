@@ -133,3 +133,33 @@ Rust panic=abort 的 fail-fast）。
 - `update.json` 的 `pub_date` 用 UTC ISO8601（`Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`）。
 - 每次发布 `update.json` 的 signature 都会变（含时间戳），脚本每次发布都会重新生成，无需手工维护。
 - 版本号单一来源：`package.json`（`scripts/bump-version.cjs` 同步到 Cargo.toml / tauri.conf.json）。
+
+### 12. update.json signature 字段：必须用 .sig 原始文本，禁止二次 base64
+**症状**：客户端「检查更新」弹「发现新版本」→ 点「立即更新」→ toast `更新失败: Invalid encoding in minisign data`。
+**根因**：Tauri signer 生成的 `.sig` 文件**本身就是 base64 编码的 minisign 签名包**（1 行文本）。如果脚本里写成
+`readFileSync(sigPath).toString("base64")`（对 base64 文本**再 base64 一次**）→ 双重编码 → Tauri 端 `minisign::Signature::decode` 失败。
+**修复**：直接读 .sig 原始文本：`$sigText = (Get-Content $sig -Raw).Trim()`（`publish-release.ps1:117` 就是这么写的）。
+**排查**：上传后 `curl .../vX.Y.Z/update.json` 看 signature 是否与本地 `.sig` 内容一致（应完全相等，长度 420 左右）。
+
+### 13. endpoint 占位符保持 `v{{current_version}}/update.json`，不要改成固定路径
+**背景**：曾有人（AI 助手）把 endpoint 从 `v{{current_version}}/update.json` 改成固定 `/update.json`（因为当时 dev binary
+拉 `v1.7.0/update.json` 404 以为目录错配）。**这是误判**——Gitea Release 附件 URL 天然带 `v{tag}` 前缀，
+`{{current_version}}` 占位符由 Tauri 客户端替换成当前版本号，恰好匹配 Gitea 的 release 目录结构。
+**教训**：**不要改 endpoint**。旧版本客户端拉 `v{旧版本}/update.json` 是**预期行为**——Gitea 每个 release
+都有自己目录下的 update.json。如果某个旧版本目录没 manifest（404），是**没给那个旧版本发布过 update.json**
+（比如 v1.7.0 release 的 update.json 要**更新**为新版本 manifest 指向 1.8.0），不是 endpoint 的问题。
+
+### 14. 完整发布流程（照这个走，别再手动）
+```powershell
+# 一键发布（推荐，覆盖：bump → 构建 → 签名 → 打zip → 上传 Gitea → 同步便携版）
+pwsh -ExecutionPolicy Bypass -File scripts/publish-release.ps1
+
+# 参数:
+#   -NoBump     不升版本，用当前版本重发（改了 update.json 逻辑后快速重发）
+#   -SkipBuild  跳过构建（产物已存在时直接重发）
+```
+**手动兜底路径**（publish-release.ps1 不可用时才用，不推荐）：
+1. `node scripts/bump-version.cjs` → 版本 1.8.0
+2. `npm run tauri:build:nobump` → 产物 `src-tauri/target/release/bundle/nsis/MS Manage_1.8.0_x64-setup.exe` + `.sig`
+3. 生成 update.json（**signature 必须取 .sig 原始文本**）并上传为 Gitea v1.8.0 release 附件
+4. 记得**同步更新所有旧版本 release 的 update.json**（如 v1.7.0 的 update.json 要指向 1.8.0，让老用户能升级）
