@@ -12,6 +12,7 @@ pub mod cmd_install;
 pub mod cmd_logs;
 pub mod cmd_market;
 pub mod cmd_memories;
+pub mod cmd_model;
 pub mod cmd_projects;
 pub mod cmd_servers;
 pub mod cmd_settings;
@@ -19,6 +20,7 @@ pub mod cmd_skills;
 pub mod cmd_usage;
 pub mod diagnose;
 pub mod install;
+pub mod model;
 pub(crate) mod process_util;
 pub mod proxy;
 pub mod proxy_endpoint;
@@ -227,6 +229,15 @@ pub fn run() {
             cmd_install::install_server,
             cmd_install::uninstall_server,
             cmd_install::refresh_install_status,
+            cmd_model::list_model_presets,
+            cmd_model::get_model_config,
+            cmd_model::save_model_config,
+            cmd_model::fetch_model_list,
+            cmd_model::analyze_skill,
+            cmd_model::analyze_all_skills,
+            cmd_model::get_skill_analysis,
+            cmd_model::list_skill_analyses,
+            cmd_model::get_provider_keys,
             cmd_projects::list_projects,
             cmd_projects::upsert_project,
             cmd_projects::delete_project,

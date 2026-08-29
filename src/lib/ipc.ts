@@ -203,6 +203,12 @@ export interface ExternalSkillDto {
   name: string;
   description: string | null;
   exists: boolean;
+  /** skill 目录下文件数（递归,不含隐藏）。用来一眼区分 "只有 SKILL.md" vs "带脚本/模板"。 */
+  fileCount: number;
+  /** ISO8601 字符串,源端最新 mtime。用来判断源端是不是比已导入版本还新。 */
+  lastModified: string | null;
+  /** 路径最后几段(如 `.../.claude/skills/my-skill`),长路径截短为 3 段 + `...` 前缀。 */
+  pathTail: string;
 }
 export interface ImportSelection {
   path: string;
@@ -305,6 +311,41 @@ export const appInfo = () => invoke<{ version: string; data_dir: string; log_dir
 export const openExternal = (url: string) => invoke<void>("open_external", { url });
 export const openPath = (path: string) => invoke<void>("open_path", { path });
 export const openDataDir = () => invoke<void>("open_data_dir");
+
+// ---- 模型配置 + skill 解析 ----
+export interface ModelPreset {
+  id: string;
+  name: string;
+  protocol: "anthropic" | "openai";
+  defaultBaseUrl: string;
+  defaultModel: string;
+  defaultContextSize: number;
+  contextOptions: number[];
+  /** 该供应商常见模型清单 —— 即使 /v1/models 接口拉不到也有选项 */
+  knownModels: string[];
+}
+export interface ModelConfig {
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  contextSize: number;
+}
+export interface SkillAnalysis {
+  skillId: string;
+  summaryZh: string;
+  analyzedAt: string;
+  model: string;
+}
+export const listModelPresets = () => invoke<ModelPreset[]>("list_model_presets");
+export const getModelConfig = () => invoke<ModelConfig | null>("get_model_config");
+export const saveModelConfig = (config: ModelConfig) => invoke<void>("save_model_config", { config });
+export const fetchModelList = (config: ModelConfig) => invoke<{ id: string; ownedBy: string | null }[]>("fetch_model_list", { config });
+export const analyzeSkill = (skillId: string) => invoke<SkillAnalysis>("analyze_skill", { skillId });
+export const analyzeAllSkills = () => invoke<number>("analyze_all_skills");
+export const getSkillAnalysis = (skillId: string) => invoke<SkillAnalysis | null>("get_skill_analysis", { skillId });
+export const listSkillAnalyses = () => invoke<Record<string, SkillAnalysis>>("list_skill_analyses");
+export const getProviderKeys = () => invoke<Record<string, string>>("get_provider_keys");
 
 // 一键体检
 export interface DoctorItem {

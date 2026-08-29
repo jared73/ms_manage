@@ -206,6 +206,15 @@ pub struct StoredSettings {
     /// 使用统计各数据源目录覆盖。key: opencode/claude/codex/gemini/grokbuild，value: 覆盖路径
     #[serde(default)]
     pub usage_overrides: HashMap<String, String>,
+    /// LLM 模型配置(用于 skill 中文摘要解析)。None = 未配置。
+    #[serde(default)]
+    pub model_config: Option<crate::model::ModelConfig>,
+    /// 各供应商的 API Key 备份(per-provider)。用户切来切去时不要丢。
+    /// key = provider id,value = 该供应商的 key。
+    /// 不放在 model_config 里是因为:切换供应商时保留所有 key,但 model_config
+    /// 只装当前激活的那一份。
+    #[serde(default)]
+    pub provider_keys: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +319,8 @@ impl Default for StoredSettings {
             github_token: None,
             skill_targets: default_skill_targets(),
             usage_overrides: HashMap::new(),
+            model_config: None,
+            provider_keys: HashMap::new(),
         }
     }
 }

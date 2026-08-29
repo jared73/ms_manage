@@ -588,6 +588,21 @@ pub struct ExternalSkillDto {
     pub name: String,
     pub description: Option<String>,
     pub exists: bool,             // ms_manage skills 目录是否已有同名
+    /// skill 目录下的文件数（递归统计,不含隐藏文件/目录）。前端用来一眼判断
+    /// "这个 skill 是不是只有 SKILL.md、还是带了一堆脚本/模板",解决用户痛点:
+    /// 扫到一堆同名 skill 时不知道哪个是 "完整版"。
+    #[serde(default)]
+    pub file_count: usize,
+    /// skill 目录中最新文件的 mtime(ISO8601)。用于前端判断 "源端是不是
+    /// 最近更新过" —— 如果 ms_manage 已导入的版本比源端还新,就没必要再覆盖。
+    /// `None` = 无法读取(如权限)。
+    #[serde(default)]
+    pub last_modified: Option<String>,
+    /// `path` 的最后 2 段(如 `.../claude/skills/my-skill` → `claude/skills/my-skill`),
+    /// 让用户在不展开 tooltip 的情况下也能知道 "这个 skill 落在哪个工具的哪个目录下"。
+    /// 长路径截断为 3 段前缀 `...` 形式。
+    #[serde(default)]
+    pub path_tail: String,
 }
 
 /// 用户勾选的导入项
@@ -598,6 +613,70 @@ pub struct ImportSelection {
     pub name: String,
     #[serde(default)]
     pub overwrite: bool,
+}
+
+/// 递归统计 skill 目录下的文件数（不含隐藏文件/目录），不含 SKILL.md 本身以外的元信息。
+/// 跟 storage/skills.rs 里的 `list_files_relative` 行为一致：跳过 `.` 开头、
+/// 不下钻已经识别出的 skill 子目录边界（这里 caller 已经按"含 SKILL.md 的目录"切好,
+/// 所以下钻就是该目录内部的资源脚本/模板,符合预期）。
+fn count_skill_files(dir: &std::path::Path) -> usize {
+    fn walk(d: &std::path::Path) -> usize {
+        let Ok(rd) = std::fs::read_dir(d) else { return 0 };
+        let mut n = 0;
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') { continue; }
+            if p.is_dir() {
+                n += walk(&p);
+            } else {
+                n += 1;
+            }
+        }
+        n
+    }
+    walk(dir)
+}
+
+/// 取 skill 目录下"最新文件"的 mtime（递归,跳过隐藏）。返回 ISO8601 或 None。
+/// 用作"源端是不是最近更新过"的判断依据 —— 如果源端 SKILL.md 或脚本比 ms_manage
+/// 已导入版本还新,用户可以勾选 overwrite 重新导入。
+fn latest_mtime_iso(dir: &std::path::Path) -> Option<String> {
+    fn walk(d: &std::path::Path, latest: &mut Option<std::time::SystemTime>) {
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name.starts_with('.') { continue; }
+            if p.is_dir() {
+                walk(&p, latest);
+            } else if let Ok(mt) = p.metadata().and_then(|m| m.modified()) {
+                *latest = Some(match *latest {
+                    Some(prev) if prev > mt => prev,
+                    _ => mt,
+                });
+            }
+        }
+    }
+    let mut latest: Option<std::time::SystemTime> = None;
+    walk(dir, &mut latest);
+    latest.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0))
+        .map(|dt| dt.to_rfc3339())
+}
+
+/// 把绝对路径截成"最后几段"形式,过长时前缀 `...`。
+/// 例: `C:\Users\foo\.claude\skills\my-skill` → `.claude\skills\my-skill`
+///     `/home/foo/.config/opencode/skill/my-sskill` → `.../opencode/skill/my-skill`
+/// Windows 上分隔符统一替换成 `/` 方便前端展示。
+fn path_tail(path: &str, max_segments: usize) -> String {
+    let normalized = path.replace('\\', "/");
+    let parts: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() <= max_segments {
+        return parts.join("/");
+    }
+    let tail = &parts[parts.len() - max_segments..];
+    format!(".../{}", tail.join("/"))
 }
 
 /// 扫描外部 skill 目录，返回发现的 skill（不含 ms_manage 自己发布的 symlink）
@@ -656,12 +735,23 @@ pub fn scan_external_skills(state: State<'_, Arc<AppState>>) -> Result<Vec<Exter
                     })
                 });
 
+            // 元信息：文件数 + 最新 mtime + 路径末尾
+            // - 文件数：让用户一眼判断 skill 是"只有 SKILL.md"还是"带一堆脚本"
+            // - mtime：跟 ms_manage 已导入版本对比，决定要不要勾选 overwrite
+            // - path_tail：长路径截短，弹窗里能直接看到落在哪个工具目录
+            let file_count = count_skill_files(&p);
+            let last_modified = latest_mtime_iso(&p);
+            let tail = path_tail(&p.to_string_lossy(), 3);
+
             out.push(ExternalSkillDto {
                 source: label.clone(),
                 path: p.to_string_lossy().to_string(),
                 name: name.clone(),
                 description,
                 exists: existing.contains(&name),
+                file_count,
+                last_modified,
+                path_tail: tail,
             });
         }
     }
@@ -747,7 +837,7 @@ mod scan_external_tests {
     #[test]
     fn test_scan_detects_skill_dirs() {
         let (tmp, sources) = setup_scan_sources();
-        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let existing: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut out = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (label, dir) in sources {
@@ -768,15 +858,35 @@ mod scan_external_tests {
                     name: name.clone(),
                     description,
                     exists: existing.contains(&name),
+                    file_count: count_skill_files(&p),
+                    last_modified: latest_mtime_iso(&p),
+                    path_tail: path_tail(&p.to_string_lossy(), 3),
                 });
             }
         }
         assert_eq!(out.len(), 2, "应识别 2 个 skill 目录");
         let a = out.iter().find(|s| s.name == "my-skill-a").unwrap();
         assert_eq!(a.description.as_deref(), Some("desc A"), "frontmatter description 应解析");
+        // 新字段：file_count 应至少含 SKILL.md,last_modified 非空,path_tail 末尾是 skill 名
+        assert!(a.file_count >= 1, "至少 SKILL.md 自身");
+        assert!(a.last_modified.is_some(), "应能读到 mtime");
+        assert!(a.path_tail.ends_with("my-skill-a"), "path_tail 应以 skill 名结尾,实际:{}", a.path_tail);
         let b = out.iter().find(|s| s.name == "my-skill-b").unwrap();
         assert!(b.description.is_none(), "无 frontmatter 降级为 None");
         drop(tmp);
+    }
+
+    #[test]
+    fn test_path_tail_segments_and_separator() {
+        // 短路径（≤ max_segments 段）：原样返回,Windows 反斜杠替换为正斜杠
+        assert_eq!(path_tail("a/b/c", 3), "a/b/c");
+        assert_eq!(path_tail("a\\b\\c", 3), "a/b/c");
+        // 长路径（> max_segments 段）：前缀 `.../`,Windows 盘符算一段所以被吃掉（HOME 内用户无感）
+        assert_eq!(path_tail("/home/u/.config/opencode/skill/my-skill", 3), ".../opencode/skill/my-skill");
+        assert_eq!(path_tail("C:\\Users\\u\\.claude\\skills\\my-skill", 3), ".../.claude/skills/my-skill");
+        // 边界：恰好等于 max_segments 不前缀 `...`
+        assert_eq!(path_tail("a/b/c", 3), "a/b/c");
+        assert_eq!(path_tail("a/b/c/d", 3), ".../b/c/d");
     }
 
     #[test]

@@ -246,6 +246,8 @@ mod tests {
             github_token: Some("ghp_1234567890abcdefghij".into()),
             skill_targets: vec![],
             usage_overrides: std::collections::HashMap::new(),
+            model_config: None,
+            provider_keys: std::collections::HashMap::new(),
         };
         let wire: AppSettings = stored.into();
         // 永远不应出现完整 token
@@ -284,6 +286,8 @@ mod tests {
             github_token: None,
             skill_targets: vec![],
             usage_overrides: std::collections::HashMap::new(),
+            model_config: None,
+            provider_keys: std::collections::HashMap::new(),
         }
     }
 }

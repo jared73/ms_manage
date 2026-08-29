@@ -1,7 +1,7 @@
 import { Outlet, NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
-import { LayoutGrid, TerminalSquare, Zap, BookOpen, Share2, ClipboardList, SlidersHorizontal, ChartColumn } from "lucide-react";
+import { LayoutGrid, TerminalSquare, Zap, BookOpen, Share2, ClipboardList, SlidersHorizontal, ChartColumn, Brain } from "lucide-react";
 import { clsx } from "clsx";
 import { appInfo } from "@/lib/ipc";
 
@@ -20,6 +20,7 @@ const items: NavItem[] = [
   { to: "/connections", key: "connections",  icon: Share2 },
   { to: "/logs",        key: "logs",         icon: ClipboardList },
   { to: "/usage",       key: "usage",        icon: ChartColumn },
+  { to: "/model",       key: "model",        icon: Brain },
   { to: "/settings",    key: "settings",     icon: SlidersHorizontal },
 ];
 

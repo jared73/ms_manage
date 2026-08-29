@@ -12,6 +12,7 @@ import { Skills } from "@/pages/Skills";
 import { Memories } from "@/pages/Memories";
 import { Connections } from "@/pages/Connections";
 import { Settings } from "@/pages/Settings";
+import { Model } from "@/pages/Model";
 import { Logs } from "@/pages/Logs";
 import { Usage } from "@/pages/Usage";
 import { getSettings, getUsageRecoveryStatus } from "@/lib/ipc";
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="/connections" element={<Connections />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/usage" element={<Usage />} />
+            <Route path="/model" element={<Model />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

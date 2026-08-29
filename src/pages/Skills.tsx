@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search, LayoutGrid, List, Loader2 } from "lucide-react";
+import { Plus, Trash2, Pencil, Eye, EyeOff, FolderOpen, Link2, Plus as PlusIcon, Upload, FileSearch, File, Search, LayoutGrid, List, Loader2, Copy, Sparkles, RefreshCw } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Section, EmptyHint } from "@/components/Section";
@@ -12,13 +12,14 @@ import { ConfirmModal } from "@/components/ConfirmModal";
 import { Toggle } from "@/components/Toggle";
 import { toast } from "sonner";
 import {
-  listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir,
+  listSkills, upsertSkill, deleteSkill, toggleSkill, openDataDir, openPath,
   listSkillTargets, toggleSkillTarget, addSkillTarget, removeSkillTarget, updateSkillTarget,
   importSkillFromPath, parseSkillFrontmatter,
   scanExternalSkills, importExternalSkills,
+  analyzeSkill, analyzeAllSkills, listSkillAnalyses, getModelConfig,
 } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
-import type { Skill, SkillTarget, ExternalSkillDto } from "@/lib/ipc";
+import type { Skill, SkillTarget, ExternalSkillDto, SkillAnalysis } from "@/lib/ipc";
 
 export function Skills() {
   const { t } = useTranslation();
@@ -35,6 +36,13 @@ export function Skills() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
+  // LLM 解析缓存:skill_id → SkillAnalysis。组件挂载时一次性加载。
+  const [analyses, setAnalyses] = useState<Record<string, SkillAnalysis>>({});
+  // 单 skill 解析中的 busy 集合,用于按钮 spinner
+  const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
+  // 全局更新进度
+  const [analyzeProgress, setAnalyzeProgress] = useState<{ done: number; total: number; current: string } | null>(null);
+  const [globalBusy, setGlobalBusy] = useState(false);
   const visibleSkills = useMemo(() => {
     if (!search.trim()) return skills;
     const q = search.toLowerCase();
@@ -51,8 +59,10 @@ export function Skills() {
 
   const load = async () => {
     try {
-      setSkills(await listSkills());
-      setTargets(await listSkillTargets());
+      const [ss, tgs, ans] = await Promise.all([listSkills(), listSkillTargets(), listSkillAnalyses()]);
+      setSkills(ss);
+      setTargets(tgs);
+      setAnalyses(ans);
     } catch (e) {
       toast.error(t("skills.load_failed", { msg: describeError(e) }) as string);
     }
@@ -162,6 +172,91 @@ export function Skills() {
     }
   };
 
+  // ---- Skill 快捷操作:打开目录 / 复制路径 ----
+  // 替代内置代码编辑器 —— 大部分 skill 是网上下的,用户用 VSCode 等
+  // 自己熟悉的工具改更高效。应用只负责"告诉你 path + 帮你一键到达"。
+  // (2026-08-29:删除了 "在终端打开" 按钮 —— 用户觉得没用,且 Windows 下
+  // cmd /c start 的引号解析在不同环境下行为不稳定)
+  const handleOpenDir = async (s: Skill) => {
+    if (!s.dir_path) {
+      toast.error(t("skills.path_missing") as string);
+      return;
+    }
+    try {
+      await openPath(s.dir_path);
+    } catch (e) {
+      toast.error(describeError(e));
+    }
+  };
+  const handleCopyPath = async (s: Skill) => {
+    if (!s.dir_path) {
+      toast.error(t("skills.path_missing") as string);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(s.dir_path);
+      toast.success(t("skills.skill_path_copied", { path: s.dir_path }) as string);
+    } catch (e) {
+      toast.error(describeError(e));
+    }
+  };
+
+  // ---- LLM 解析 ----
+  const handleAnalyzeOne = async (s: Skill) => {
+    if (analyzingIds.has(s.id) || globalBusy) return;
+    setAnalyzingIds((m) => new Set([...m, s.id]));
+    try {
+      const cfg = await getModelConfig();
+      if (!cfg) {
+        toast.error(t("skill_analyze.not_configured") as string);
+        return;
+      }
+      const a = await analyzeSkill(s.id);
+      setAnalyses((prev) => ({ ...prev, [s.id]: a }));
+    } catch (e) {
+      toast.error(describeError(e));
+    } finally {
+      setAnalyzingIds((m) => { const n = new Set(m); n.delete(s.id); return n; });
+    }
+  };
+  const handleAnalyzeAll = async () => {
+    if (globalBusy) return;
+    setGlobalBusy(true);
+    try {
+      const cfg = await getModelConfig();
+      if (!cfg) {
+        toast.error(t("skill_analyze.not_configured") as string);
+        return;
+      }
+      const count = await analyzeAllSkills();
+      // 重新加载缓存拿到最新结果
+      await load();
+      toast.success(t("skill_analyze.global_done", { count }) as string);
+    } catch (e) {
+      toast.error(describeError(e));
+    } finally {
+      setGlobalBusy(false);
+      setAnalyzeProgress(null);
+    }
+  };
+
+  // 监听全局更新进度事件
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let aborted = false;
+    (async () => {
+      try {
+        const u = await tauriListen<{ done: number; total: number; current: string }>(
+          "skill_analysis_progress",
+          (e) => setAnalyzeProgress(e.payload),
+        );
+        if (aborted) { u(); return; }
+        unlisten = u;
+      } catch { /* 非 Tauri 环境忽略 */ }
+    })();
+    return () => { aborted = true; unlisten?.(); };
+  }, []);
+
   return (
     <div className="space-y-4 p-6 relative">
       {/* 拖拽时的全屏提示 */}
@@ -206,6 +301,17 @@ export function Skills() {
             </button>
             <button className="btn-ghost" onClick={() => setScanModalOpen(true)} title={t("skills.scan_external_tooltip") as string}>
               <FileSearch className="icon-sm"/>{t("skills.scan_external_btn")}
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={handleAnalyzeAll}
+              disabled={globalBusy}
+              title={t("skill_analyze.global_btn_tooltip") as string}
+            >
+              {globalBusy ? <Loader2 className="icon-sm animate-spin" /> : <Sparkles className="icon-sm" />}
+              {globalBusy && analyzeProgress
+                ? `${analyzeProgress.done}/${analyzeProgress.total}`
+                : t("skill_analyze.global_btn")}
             </button>
             <button className="btn-ghost" onClick={() => openDataDir()} title={t("skills.open_data_dir_tooltip") as string}>
               <FolderOpen className="icon-sm"/>{t("skills.data_dir_btn")}
@@ -258,6 +364,21 @@ export function Skills() {
                   <div className="min-w-0">
                     <div className="truncate font-semibold">{s.name}</div>
                     {s.description && <div className="line-clamp-2 text-xs text-fg-muted">{s.description}</div>}
+                    {analyses[s.id] && (
+                      <div className="mt-1.5 rounded-md border border-accent/20 bg-accent/5 px-2 py-1.5 text-2xs">
+                        <div className="mb-0.5 flex items-center gap-1 font-medium text-accent">
+                          <Sparkles className="icon-xs" />
+                          {t("skill_analyze.card_analyzed_label")}
+                        </div>
+                        <div className="text-fg">{analyses[s.id].summaryZh}</div>
+                        <div className="mt-0.5 text-3xs text-fg-muted/70">
+                          {t("skill_analyze.card_analyzed_by", {
+                            model: analyses[s.id].model,
+                            when: new Date(analyses[s.id].analyzedAt).toLocaleDateString(),
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {s.files && s.files.length > 0 && (
                       <div className="mt-2 rounded-md bg-bg-subtle px-2 py-1.5 text-2xs text-fg-muted">
                         <div className="mb-1 flex items-center gap-1 font-medium text-fg">
@@ -268,6 +389,32 @@ export function Skills() {
                             <li key={f} className="truncate font-mono text-3xs">{f}</li>
                           ))}
                         </ul>
+                      </div>
+                    )}
+                    {/* 目录快捷操作:打开 / 复制路径 —— 替代内置编辑器,
+                        大部分 skill 是网上下的,用户用 VSCode 等熟悉工具改更高效 */}
+                    {s.dir_path && (
+                      <div
+                        className="mt-2 flex items-center gap-1 text-2xs"
+                        title={t("skills.skill_path_tooltip", { path: s.dir_path }) as string}
+                      >
+                        <button
+                          className="btn-ghost p-0.5 text-fg-muted hover:text-fg"
+                          onClick={(e) => { e.preventDefault(); void handleOpenDir(s); }}
+                          title={t("skills.skill_open_dir") as string}
+                          aria-label={t("skills.skill_open_dir") as string}
+                        >
+                          <FolderOpen className="icon-xs" />
+                        </button>
+                        <code className="min-w-0 flex-1 truncate font-mono text-fg-muted">{s.dir_path}</code>
+                        <button
+                          className="btn-ghost p-0.5 text-fg-muted hover:text-fg"
+                          onClick={(e) => { e.preventDefault(); void handleCopyPath(s); }}
+                          title={t("skills.skill_copy_path") as string}
+                          aria-label={t("skills.skill_copy_path") as string}
+                        >
+                          <Copy className="icon-xs" />
+                        </button>
                       </div>
                     )}
                   </div>
@@ -286,6 +433,18 @@ export function Skills() {
                 <div className="mt-3 flex items-center justify-between">
                   <div className="text-2xs text-fg-muted">{new Date(s.updated_at).toLocaleString()}</div>
                   <div className="flex gap-1">
+                    {/* 解析：紫色(用 LLM 给个中文摘要) */}
+                    <button
+                      className="btn-ghost p-1.5 text-accent hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => handleAnalyzeOne(s)}
+                      disabled={analyzingIds.has(s.id) || globalBusy}
+                      title={analyses[s.id] ? t("skill_analyze.refresh_one_tooltip") as string : t("skill_analyze.card_analyze_tooltip") as string}
+                      aria-label={t("skill_analyze.card_analyze_btn") as string}
+                    >
+                      {analyzingIds.has(s.id) ? (
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+                      ) : analyses[s.id] ? <RefreshCw className="icon-sm"/> : <Sparkles className="icon-sm"/>}
+                    </button>
                     {/* 启停：绿色 */}
                     <button
                       className="btn-ghost p-1.5 text-ok disabled:opacity-50 disabled:cursor-not-allowed"
@@ -822,9 +981,27 @@ function listenSkillImportProgress(
   );
 }
 
+/**
+ * 把 ISO 时间格式化成"3 天前 / 2 小时前"形式。
+ * 用 Intl.RelativeTimeFormat 自动跟随 i18n 语言（zh → "3 天前",en → "3 days ago"），
+ * 不用再为时间单位加 i18n key。
+ */
+function formatRelativeTime(iso: string, lang: string): string {
+  const then = new Date(iso).getTime();
+  const diffSec = Math.round((then - Date.now()) / 1000);
+  const abs = Math.abs(diffSec);
+  const rtf = new Intl.RelativeTimeFormat(lang || undefined, { numeric: "auto" });
+  if (abs < 60) return rtf.format(diffSec, "second");
+  if (abs < 3600) return rtf.format(Math.round(diffSec / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(diffSec / 3600), "hour");
+  if (abs < 86400 * 30) return rtf.format(Math.round(diffSec / 86400), "day");
+  if (abs < 86400 * 365) return rtf.format(Math.round(diffSec / (86400 * 30)), "month");
+  return rtf.format(Math.round(diffSec / (86400 * 365)), "year");
+}
+
 /** 扫描外部 Skill 弹窗：列出 Claude/opencode/Cursor 等目录里已有的 skill，勾选导入 */
 function ScanExternalModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [results, setResults] = useState<ExternalSkillDto[] | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -835,9 +1012,13 @@ function ScanExternalModal({ onClose, onImported }: { onClose: () => void; onImp
       try {
         const r = await scanExternalSkills();
         if (cancelled) return;
-        setResults(r);
+        // 排序：未导入过的（新的）排在前面,已存在的沉底 —— 让用户一眼看到
+        // "哪些是我没拿过的",而不是被一堆已导入的刷屏。Array.sort 是 stable
+        // （ES2019+）,同名/同 exists 的保留相对顺序,不会打乱同名不同源的展示。
+        const sorted = [...r].sort((a, b) => Number(a.exists) - Number(b.exists));
+        setResults(sorted);
         // 默认勾选所有"新发现"（不勾已存在）
-        setChecked(new Set(r.filter((x) => !x.exists).map((x) => x.path)));
+        setChecked(new Set(sorted.filter((x) => !x.exists).map((x) => x.path)));
       } catch (e) {
         toast.error(describeError(e));
         if (!cancelled) onClose();
@@ -916,8 +1097,28 @@ function ScanExternalModal({ onClose, onImported }: { onClose: () => void; onImp
                     {r.description && (
                       <div className="mt-0.5 truncate text-xs text-fg-muted">{r.description}</div>
                     )}
-                    <div className="mt-0.5 text-2xs text-fg-muted/70">
-                      {t("skills.scan_source")}: {r.source}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-fg-muted/70">
+                      <span className="font-mono">{r.source}</span>
+                      {r.fileCount > 0 && (
+                        <span title={t("skills.scan_files_count", { count: r.fileCount }) as string}>
+                          {t("skills.scan_files_count", { count: r.fileCount })}
+                        </span>
+                      )}
+                      {r.lastModified ? (
+                        <span title={new Date(r.lastModified).toLocaleString()}>
+                          {t("skills.scan_modified", { when: formatRelativeTime(r.lastModified, i18n.language) })}
+                        </span>
+                      ) : (
+                        <span>{t("skills.scan_modified_unknown")}</span>
+                      )}
+                      {r.pathTail && (
+                        <span
+                          className="truncate font-mono opacity-70"
+                          title={t("skills.scan_path_tooltip", { path: r.path }) as string}
+                        >
+                          {r.pathTail}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </label>
