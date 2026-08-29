@@ -28,6 +28,12 @@ Thumbs.db
 # Claude / 编辑器配置
 .claude/
 
+# 本地开发工具目录(每位开发者本地环境不同,不进版本库)
+.trae/
+.trellis/
+.opencode/
+AGENTS.md
+
 # 用户数据 / 临时 / 日志
 *.log
 *.tmp
