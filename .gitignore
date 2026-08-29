@@ -7,6 +7,7 @@ node_modules/
 dist/
 dist-portable/
 dist-zip/
+update.json
 .vite/
 .npm/
 .pnpm-store/
