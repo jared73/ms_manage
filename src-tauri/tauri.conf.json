@@ -54,9 +54,8 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCNjFFMEY0OUQxNEVEQTUKUldTbDdSU2Q5T0JoeTZWWG0reEp6TUxiSkJVM1VtaWNIczdoTFEwRDdFWkZWWDFYMUoxSG4xTDkK",
-      "dangerousInsecureTransportProtocol": true,
       "endpoints": [
-        "http://www.73x.space:9100/Liuqingshan/ms-manage-releases/releases/download/v{{current_version}}/update.json"
+        "https://github.com/jared73/ms_manage/releases/download/v{{current_version}}/update.json"
       ]
     }
   }

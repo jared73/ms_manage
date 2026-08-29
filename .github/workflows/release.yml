@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # 例如 v1.9.0
+
+jobs:
+  release:
+    name: Build + Publish to GitHub Release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # 需要写权限才能创建 release + 上传 asset
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 验证 tag 与 package.json 版本一致
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"   # e.g. v1.9.0
+          $ver = $tag.TrimStart('v')
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($ver -ne $pkg) {
+            Write-Error "Tag version ($ver) != package.json version ($pkg)"
+            exit 1
+          }
+          Write-Host "version OK: $ver"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: 注入签名私钥(用于 updater)
+        # Tauri updater 要求 .msi/.exe 用 minisign 私钥签名,客户端用内嵌公钥验签。
+        # 私钥放在 GitHub repo 的 Secrets 里(TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD)。
+        shell: pwsh
+        run: |
+          $key = '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'
+          $pwd = '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}'
+          if (-not $key) { Write-Error "TAURI_SIGNING_PRIVATE_KEY secret not set"; exit 1 }
+          if (-not $pwd) { Write-Error "TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret not set"; exit 1 }
+          "TAURI_SIGNING_PRIVATE_KEY=$key" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$pwd" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build (npm run tauri:build:nobump —— 版本已由 tag 锁定)
+        working-directory: src-tauri
+        run: cargo build --release
+        env:
+          NODE_ENV: production
+
+      - name: 收集产物
+        id: collect
+        shell: pwsh
+        run: |
+          $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $verTag = "v$ver"
+          $exe = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter "MS Manage_${ver}_x64-setup.exe" | Select -First 1
+          $sig = "$($exe.FullName).sig"
+          if (-not (Test-Path $sig)) { Write-Error "Missing signature: $sig"; exit 1 }
+
+          # 同步便携版
+          $portableDir = "dist-portable"
+          if (-not (Test-Path $portableDir)) { New-Item -ItemType Directory $portableDir | Out-Null }
+          Copy-Item src-tauri/target/release/ms_manage.exe "$portableDir/MS Manage.exe" -Force
+
+          # 生成 update.json (Tauri updater 用的清单)
+          $sigText = (Get-Content $sig -Raw).Trim()
+          $updateJson = @{
+            version   = $ver
+            notes     = "MS Manage $verTag"
+            pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = @{
+              'windows-x86_64' = @{
+                signature = $sigText
+                url       = "https://github.com/jared73/ms_manage/releases/download/$verTag/$([uri]::EscapeDataString($exe.Name))"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $updateJson | Out-File -FilePath update.json -Encoding utf8NoBOM
+
+          Write-Host "Built artifacts ready for $verTag"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            MS Manage ${{ github.ref_name }}
+
+            自动构建产物,客户端可在「设置 → 关于」检查更新。
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            update.json
+            dist-portable/MS Manage.exe
+          fail_on_unmatched_files: true
