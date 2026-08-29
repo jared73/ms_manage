@@ -1,8 +1,10 @@
 # MS Manage
 
-> MCP server 与 Skill 的统一管理工具 — 类似 [mcp-router](https://github.com/mcp-router/mcp-router) 的桌面应用，Windows 优先，中文界面。
+> MCP server 与 Skill 的统一管理桌面工具 — Tauri 2 + React 18 + Rust，Windows 优先，中文界面。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Build Status](https://github.com/jared73/ms_manage/actions/workflows/ci.yml/badge.svg)](https://github.com/jared73/ms_manage/actions)
+[![GitHub stars](https://img.shields.io/github/stars/jared73/ms_manage?style=social)](https://github.com/jared73/ms_manage/stargazers)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2-blueviolet)](https://tauri.app)
 [![React 18](https://img.shields.io/badge/React-18-61dafb)](https://react.dev)
 
