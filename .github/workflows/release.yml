@@ -9,7 +9,7 @@ jobs:
   release:
     name: Build + Publish to GitHub Release
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write   # 需要写权限才能创建 release + 上传 asset
 
@@ -58,8 +58,7 @@ jobs:
           "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$pwd" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build (npm run tauri:build:nobump —— 版本已由 tag 锁定)
-        working-directory: src-tauri
-        run: cargo build --release
+        run: npm run tauri:build:nobump
         env:
           NODE_ENV: production
 

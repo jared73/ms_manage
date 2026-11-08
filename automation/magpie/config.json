@@ -1,0 +1,129 @@
+{
+  "project": "ms_manage",
+  "description": "Magpie-style autonomous maintenance loop for MS Manage",
+  "repository": {
+    "base_branch": "main",
+    "work_branch_prefix": "agent/",
+    "remotes": {
+      "origin": "http://www.73x.space:9100/Liuqingshan/ms_manage.git",
+      "github": "https://github.com/jared73/ms_manage.git"
+    },
+    "github": {
+      "owner": "jared73",
+      "repo": "ms_manage"
+    },
+    "gitea": {
+      "base_url": "http://www.73x.space:9100",
+      "owner": "Liuqingshan",
+      "repo": "ms_manage"
+    }
+  },
+  "agent": {
+    "cli": "opencode",
+    "agent": "build",
+    "model": "magpie/workbuddy/auto",
+    "timeout_minutes": 90
+  },
+  "limits": {
+    "max_issues_per_run": 3,
+    "max_files_per_issue": 20,
+    "max_ci_retries": 3,
+    "max_ci_wait_minutes": 45
+  },
+  "automation": {
+    "auto_merge": true,
+    "auto_release": true,
+    "release_mode": "nightly",
+    "release_bump": "minor",
+    "require_clean_tree": true,
+    "protected_paths": [
+      ".github/workflows/**",
+      ".github/actions/**",
+      "scripts/publish-release.ps1",
+      "src-tauri/tauri.conf.json",
+      "*.key",
+      "*.pem",
+      ".env",
+      ".env.*",
+      "automation/magpie/**"
+    ],
+    "forbidden_dependency_changes": true
+  },
+  "feedback": {
+    "sources": [
+      {
+        "name": "gitea",
+        "kind": "gitea",
+        "enabled": false,
+        "token_env": "GITEA_TOKEN"
+      },
+      {
+        "name": "github",
+        "kind": "github",
+        "enabled": true,
+        "token_env": "GITHUB_TOKEN"
+      }
+    ]
+  },
+  "schedule": {
+    "issues_interval_minutes": 30,
+    "community_interval_minutes": 60,
+    "nightly_time": "03:10"
+  },
+  "gate": {
+    "steps": [
+      {
+        "name": "diff-check",
+        "command": "git -c core.whitespace=cr-at-eol diff --check",
+        "cwd": "."
+      },
+      {
+        "name": "typecheck",
+        "command": "npx tsc --noEmit",
+        "cwd": "."
+      },
+      {
+        "name": "lint",
+        "command": "npm run lint",
+        "cwd": "."
+      },
+      {
+        "name": "i18n",
+        "command": "npm run check:i18n",
+        "cwd": "."
+      },
+      {
+        "name": "unit-tests",
+        "command": "npm test",
+        "cwd": "."
+      },
+      {
+        "name": "frontend-build",
+        "command": "npm run build",
+        "cwd": "."
+      },
+      {
+        "name": "cargo-check",
+        "command": "cargo check --message-format=short",
+        "cwd": "src-tauri"
+      },
+      {
+        "name": "cargo-test",
+        "command": "cargo test --lib --message-format=short",
+        "cwd": "src-tauri"
+      }
+    ]
+  },
+  "release": {
+    "tag_prefix": "v",
+    "github_remote": "github",
+    "origin_remote": "origin",
+    "workflow": ".github/workflows/release.yml",
+    "bump_script": "scripts/bump-version.cjs",
+    "version_files": [
+      "package.json",
+      "src-tauri/Cargo.toml",
+      "src-tauri/tauri.conf.json"
+    ]
+  }
+}
