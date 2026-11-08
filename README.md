@@ -84,9 +84,10 @@ ms_manage/
 │   │   ├── storage/          # JSON 持久化层
 │   │   └── usage/            # 使用统计聚合
 │   ├── tauri.conf.json
+│   ├── tauri.windows.conf.json
 │   ├── capabilities/default.json
+│   ├── icons/                # 应用图标(NSIS 图标 + Windows Store 磁贴)
 │   └── Cargo.toml
-├── icons/                    # 应用图标
 ├── docs/                     # 设计文档
 └── package.json
 ```
