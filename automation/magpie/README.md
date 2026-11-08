@@ -121,6 +121,7 @@ Gitea 的 `GITEA_TOKEN` 需要有 **read:issue** 权限才能读取 issue 列表
 
 - `release_mode = "nightly"`（默认）：issue 循环只合并，nightly 统一发版。
 - `release_mode = "immediate"`：每次有合并就发版，版本号增长快，不建议长期使用。
+- 只有 `feat:` / `fix:` / `perf:` 提交才会触发自动发版；`docs:` / `chore:` / `test:` 不会。
 
 ### 自动化开关
 
