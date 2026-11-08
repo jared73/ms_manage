@@ -35,10 +35,26 @@ function Invoke-ReleaseGit {
 
 Write-MagpieLog -Message "Release check in $repoRoot (execute=$([bool]$Execute), bump=$Bump)" -LogPath $logPath
 
-Invoke-ReleaseGit @('fetch', 'github', 'main', '--tags', '--prune') | Out-Null
-Invoke-ReleaseGit @('fetch', 'origin', 'main', '--tags', '--prune') | Out-Null
-Invoke-ReleaseGit @('checkout', $config.repository.base_branch) | Out-Null
-Invoke-ReleaseGit @('pull', '--ff-only', 'github', $config.repository.base_branch) | Out-Null
+$fetchOk = $true
+try {
+    Invoke-ReleaseGit @('fetch', 'github', 'main', '--tags', '--prune') | Out-Null
+    Invoke-ReleaseGit @('fetch', 'origin', 'main', '--tags', '--prune') | Out-Null
+}
+catch {
+    $fetchOk = $false
+    if ($Execute) { throw }
+    Write-MagpieLog -Message "Remote fetch failed; continuing with local refs for dry-run: $($_.Exception.Message)" -Level 'WARN' -LogPath $logPath
+}
+
+if ($fetchOk) {
+    Invoke-ReleaseGit @('checkout', $config.repository.base_branch) | Out-Null
+    Invoke-ReleaseGit @('pull', '--ff-only', 'github', $config.repository.base_branch) | Out-Null
+} else {
+    $currentBranch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null).Trim()
+    if ($currentBranch -ne $config.repository.base_branch) {
+        throw "Cannot verify release from branch '$currentBranch' without a successful fetch."
+    }
+}
 Assert-CleanWorkingTree -RepoRoot $repoRoot
 
 $latestTag = ''
