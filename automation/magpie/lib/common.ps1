@@ -68,6 +68,12 @@ function Get-EnvOrUserValue {
 }
 
 function Get-GitHubToken {
+    $tokenFile = Get-EnvOrUserValue -Name 'MAGPIE_GITHUB_TOKEN_FILE'
+    if ($tokenFile -and (Test-Path -LiteralPath $tokenFile)) {
+        $fileToken = (Get-Content -LiteralPath $tokenFile -Raw -Encoding utf8).Trim()
+        if ($fileToken) { return $fileToken }
+    }
+
     $token = Get-EnvOrUserValue -Name 'GITHUB_TOKEN'
     if ($token) { return $token }
 
