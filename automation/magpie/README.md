@@ -27,7 +27,7 @@ Windows 计划任务 / 手动触发
 ### 0. 前置条件
 
 - Windows + PowerShell 7（`pwsh`）
-- `opencode` v2.2+，且已配置 `magpie/workbuddy/auto` 模型
+- `opencode` v2.2+，且已配置 `minimax-cn-coding-plan/MiniMax-M3.1-Flash` 模型
 - Git 对 `origin`（Gitea）和 `github`（GitHub）都有推送权限
 - 环境变量：
   - `GITHUB_TOKEN`：可选；未设置时会自动回退 Git Credential Manager 中 `https://github.com` 的凭据
@@ -145,7 +145,7 @@ Gitea 的 `GITEA_TOKEN` 需要有 **read:issue** 权限才能读取 issue 列表
 ## 常见问题
 
 **Q：`opencode run` 找不到模型？**  
-先运行 `opencode models | Select-String workbuddy` 确认 `magpie/workbuddy/auto` 可用；不可用就改 `config.json → agent.model`。
+先运行 `opencode models | Select-String minimax` 确认 `minimax-cn-coding-plan/MiniMax-M3.1-Flash` 可用；不可用就改 `config.json → agent.model`。
 
 **Q：GitHub token 没配置？**  
 脚本会尝试 Git Credential Manager。仍失败时，设置用户环境变量：

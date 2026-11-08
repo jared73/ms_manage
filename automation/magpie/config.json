@@ -21,7 +21,7 @@
   "agent": {
     "cli": "opencode",
     "agent": "build",
-    "model": "magpie/workbuddy/auto",
+    "model": "minimax-cn-coding-plan/MiniMax-M3.1-Flash",
     "timeout_minutes": 90
   },
   "limits": {
