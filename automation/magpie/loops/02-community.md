@@ -23,7 +23,7 @@
 2. 先写失败测试（Red Check），保存失败输出到 `state/redcheck-<number>.log`。
 3. 最小修复，遵循 `docs/agent/CODE-STANDARDS.md`。
 4. 运行 `pwsh -File automation/magpie/check-gate.ps1`，必须全绿。
-5. 提交、push 到 `origin`、开 PR、等 CI、按配置合并（脚本同 Loop A）。
+5. 提交、push 到 `origin` 和 `github`、开 PR、等 CI、按配置合并（脚本同 Loop A）。
 6. 回到原 issue / 评论下回复修复结果。
 
 ## 3. 回复规范

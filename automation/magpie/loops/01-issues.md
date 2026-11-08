@@ -39,7 +39,7 @@
    - UI 文案同时更新 `src/i18n/zh.ts` 和 `src/i18n/en.ts`。
 6. **验证**：运行 `pwsh -NoProfile -File automation/magpie/check-gate.ps1`，必须全绿。
 7. **提交**：中文 conventional commit，风格参考最近 5 条提交；提交信息里写 `fix: ...` 或 `feat: ...`。
-8. **推送分支**：`git push origin <branch>`。
+8. **推送分支**：先 `git push origin <branch>`，再 `git push github <branch>`。GitHub 上必须有这个分支，`create-pr.ps1` 才能创建 PR。
 9. **开 PR**：
 
    ```powershell
