@@ -16,8 +16,6 @@ interface ConfirmModalProps {
   /** 主标题内容(主标题是必传,具体文案可包 JSX) */
   title: React.ReactNode;
   children: React.ReactNode;
-  /** 主解释文本(已用 children 替代;保留仅为向后兼容) */
-  message?: React.ReactNode;
   /** 取消按钮文案,默认 "common.cancel" */
   cancelLabel?: React.ReactNode;
   /** 确认按钮文案,默认 "common.confirm" */
@@ -35,8 +33,6 @@ export function ConfirmModal({
   open,
   title,
   children,
-  // message 已废弃 —— 直接用 children 即可;保留参数避免破坏旧调用
-  message: _deprecatedMessage,
   cancelLabel,
   confirmLabel,
   variant = "danger",
