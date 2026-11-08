@@ -116,6 +116,11 @@
   },
   "release": {
     "tag_prefix": "v",
+    "commit_types": [
+      "feat",
+      "fix",
+      "perf"
+    ],
     "github_remote": "github",
     "origin_remote": "origin",
     "workflow": ".github/workflows/release.yml",

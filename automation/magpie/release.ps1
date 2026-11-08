@@ -46,7 +46,11 @@ $tagOutput = & git -C $repoRoot describe --tags --abbrev=0 2>$null
 if ($LASTEXITCODE -eq 0) { $latestTag = "$tagOutput".Trim() }
 $range = if ($latestTag) { "$latestTag..$($config.repository.base_branch)" } else { $config.repository.base_branch }
 $commitLines = @(& git -C $repoRoot log $range --pretty=format:'%h %s' 2>$null)
-$commits = @($commitLines | Where-Object { $_ -and $_ -notmatch '^[0-9a-f]+ chore\(release\):' })
+$commitTypes = @($config.release.commit_types)
+$typePattern = ($commitTypes | ForEach-Object { [regex]::Escape($_) }) -join '|'
+$commits = @($commitLines | Where-Object {
+    $_ -and $_ -match "^[0-9a-f]+ ($typePattern)(\([^)]+\))?!?:"
+})
 
 if ($commits.Count -eq 0) {
     $message = "No unreleased commits since $latestTag. Nothing to release."
