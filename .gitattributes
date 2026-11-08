@@ -17,6 +17,8 @@
 *.cjs       text eol=lf
 *.mjs       text eol=lf
 *.js        text eol=lf
+*.sh        text eol=lf
+Dockerfile  text eol=lf
 
 # 二进制一律不规范化
 *.png       binary
