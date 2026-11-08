@@ -11,7 +11,7 @@ import { useTranslation } from "react-i18next";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { installServer, uninstallServer } from "@/lib/ipc";
-import type { McpServer } from "@/lib/ipc";
+import type { InstallProgressEvent, McpServer } from "@/lib/ipc";
 import { describeError } from "@/lib/errors";
 
 type Progress = { stage: string; message: string };
@@ -83,11 +83,7 @@ export function useInstallFlow(onSettled?: () => void): UseInstallFlow {
     // 用 ref 的"创建时"值,而不是 ref.current 的"运行时"值,避免闭包旧值
     const resolvers = progressResolversRef.current;
 
-    listen<{
-      id: string;
-      stage: "checking" | "installing" | "resolving" | "done" | "error";
-      message: string;
-    }>("install_progress", (e) => {
+    listen<InstallProgressEvent>("install_progress", (e) => {
       const { id, stage, message } = e.payload;
       setProgress((prev) => ({ ...prev, [id]: { stage, message } }));
       if (stage === "done" || stage === "error") {

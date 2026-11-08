@@ -208,7 +208,7 @@ function ProjectForm({
   const { t } = useTranslation();
   return (
     <div className="space-y-3">
-      <Field label={t("projects.name")} error={!initial.name.trim() ? undefined : undefined}>
+      <Field label={t("projects.name")}>
         <input
           className="input"
           value={initial.name}
