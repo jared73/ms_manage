@@ -6,7 +6,7 @@
 ## 0. 启动
 
 1. 读 `automation/magpie/config.json`、`docs/agent/CODE-STANDARDS.md`、`docs/agent/LESSONS.md`。
-2. 运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/get-feedback.ps1 -Json`，保存到 `state/inbox-community-<stamp>.json`。
+2. 运行 `pwsh -NoProfile -File automation/magpie/get-feedback.ps1 -Json`，保存到 `state/inbox-community-<stamp>.json`。
 3. 只看最近 24 小时有更新的 issue / PR；没有新反馈就写一份空的运行报告并结束。
 
 ## 1. 分类

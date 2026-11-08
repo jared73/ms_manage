@@ -1,0 +1,24 @@
+services:
+  runner:
+    build:
+      context: .
+      args:
+        PWSH_TARBALL: powershell-7.4.6-linux-x64.tar.gz
+    image: ms-manage-magpie-runner:latest
+    container_name: ms-manage-magpie-runner
+    network_mode: host
+    working_dir: /workspace/ms_manage
+    environment:
+      MAGPIE_REPO_ROOT: /workspace/ms_manage
+      MAGPIE_MODEL: ${MAGPIE_MODEL:-opencode-go/deepseek-v4.1-flash}
+      MAGPIE_GATE_QUICK: "1"
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      http_proxy: http://127.0.0.1:7890
+      https_proxy: http://127.0.0.1:7890
+      no_proxy: 127.0.0.1,localhost,192.168.0.0/16,172.16.0.0/12
+    volumes:
+      - ./repo:/workspace/ms_manage
+      - ./opencode-data:/root/.local/share/opencode
+    restart: unless-stopped
+    command: ["sleep", "infinity"]

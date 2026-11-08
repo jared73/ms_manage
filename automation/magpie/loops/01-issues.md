@@ -9,7 +9,7 @@
 2. 运行：
 
    ```powershell
-   pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/get-feedback.ps1 -Json
+   pwsh -NoProfile -File automation/magpie/get-feedback.ps1 -Json
    ```
 
    把输出保存到 `automation/magpie/state/inbox-<stamp>.json` 后再读取。不要直接把大段 JSON 重复输出到对话里。
@@ -36,26 +36,26 @@
    - 遵循 `docs/agent/CODE-STANDARDS.md`。
    - 不修改受保护路径，不新增第三方依赖。
    - UI 文案同时更新 `src/i18n/zh.ts` 和 `src/i18n/en.ts`。
-6. **验证**：运行 `pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/check-gate.ps1`，必须全绿。
+6. **验证**：运行 `pwsh -NoProfile -File automation/magpie/check-gate.ps1`，必须全绿。
 7. **提交**：中文 conventional commit，风格参考最近 5 条提交；提交信息里写 `fix: ...` 或 `feat: ...`。
 8. **推送分支**：`git push origin <branch>`。
 9. **开 PR**：
 
    ```powershell
-   pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/create-pr.ps1 -Head <branch> -Title "<title>" -Body "<body>"
+   pwsh -NoProfile -File automation/magpie/create-pr.ps1 -Head <branch> -Title "<title>" -Body "<body>"
    ```
 
 10. **等 CI**：
 
     ```powershell
-    pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/wait-ci.ps1 -Sha <commit-sha>
+    pwsh -NoProfile -File automation/magpie/wait-ci.ps1 -Sha <commit-sha>
     ```
 
     如果失败，修复后重试，最多 `config.limits.max_ci_retries` 次；仍失败则回滚分支并在 issue 说明。
 11. **合并**（仅当 `config.automation.auto_merge=true` 且 CI 全绿）：
 
     ```powershell
-    pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/merge-pr.ps1 -Number <pr-number>
+    pwsh -NoProfile -File automation/magpie/merge-pr.ps1 -Number <pr-number>
     ```
 
 12. 在 issue 下回复：修复说明 + PR 链接 + commit hash。

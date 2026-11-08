@@ -24,12 +24,18 @@ $steps = @($config.gate.steps)
 if ($Quick) {
     $steps = @($steps | Where-Object { $quickSteps -contains $_.name })
 }
+if ($env:MAGPIE_GATE_QUICK -eq '1') {
+    # NAS/Linux runner: Rust/Tauri Windows build is handled by GitHub Actions;
+    # keep the local gate to frontend checks to avoid requiring a Windows toolchain.
+    $steps = @($steps | Where-Object { $_.name -notlike 'cargo-*' })
+}
 
 Write-MagpieLog -Message "Gate start: $RepoRoot (quick=$([bool]$Quick))" -LogPath $logPath
 
 if (-not $SkipInstall) {
-    $npmReady = (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules\.bin\vitest.cmd')) -and
-                (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules\typescript\package.json'))
+    $vitestName = if ($IsWindows) { 'vitest.cmd' } else { 'vitest' }
+    $npmReady = (Test-Path -LiteralPath (Join-Path $RepoRoot "node_modules/.bin/$vitestName")) -and
+                (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules/typescript/package.json'))
     if (-not $npmReady) {
         Write-MagpieLog -Message 'node_modules missing or incomplete; running npm ci (this may take a few minutes).' -LogPath $logPath
         Push-Location -LiteralPath $RepoRoot
