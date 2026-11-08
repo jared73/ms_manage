@@ -66,8 +66,8 @@
     ]
   },
   "schedule": {
-    "issues_interval_minutes": 30,
-    "community_interval_minutes": 60,
+    "issues_interval_minutes": 120,
+    "community_interval_minutes": 240,
     "nightly_time": "03:10"
   },
   "gate": {

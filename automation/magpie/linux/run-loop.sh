@@ -57,6 +57,34 @@ if ! flock -n 9; then
     exit 0
 fi
 
+# Empty-inbox fast path: do not boot the model when there is nothing to do.
+if [ "$LOOP" != "nightly" ]; then
+    PRECHECK_JSON="$STATE_DIR/precheck-$LOOP-$STAMP.json"
+    PRECHECK_ERR="$STATE_DIR/precheck-$LOOP-$STAMP.err.log"
+    if pwsh -NoProfile -File "$MAGPIE_DIR/get-feedback.ps1" -Json > "$PRECHECK_JSON" 2> "$PRECHECK_ERR"; then
+        FEEDBACK_COUNT="$(node -e "try{const j=require(process.argv[1]); process.stdout.write(String(j.count ?? 0))}catch(e){process.stdout.write('ERR')}" "$PRECHECK_JSON")"
+    else
+        FEEDBACK_COUNT="ERR"
+    fi
+
+    if [ "$FEEDBACK_COUNT" = "0" ] && [ ! -s "$PRECHECK_ERR" ]; then
+        REPORT="$STATE_DIR/report-$LOOP-$STAMP.md"
+        {
+            echo "# Magpie Loop $LOOP — 空跑"
+            echo
+            echo "- 时间：$(date '+%Y-%m-%d %H:%M:%S %z')"
+            echo "- 结果：没有新的 issue / PR 反馈。"
+            echo "- 动作：跳过 opencode，不消耗模型 tokens。"
+        } > "$REPORT"
+        log "No feedback (count=0); skipped opencode to save tokens."
+        exit 0
+    fi
+
+    if [ "$FEEDBACK_COUNT" = "ERR" ] || [ -s "$PRECHECK_ERR" ]; then
+        log "WARN: feedback precheck failed; continuing with opencode. See $PRECHECK_ERR"
+    fi
+fi
+
 MODEL="${MAGPIE_MODEL:-$(config_value agent.model)}"
 TIMEOUT_MINUTES="${MAGPIE_TIMEOUT_MINUTES:-$(config_value agent.timeout_minutes)}"
 PROMPT_FILE="$STATE_DIR/prompt-$LOOP-$STAMP.md"

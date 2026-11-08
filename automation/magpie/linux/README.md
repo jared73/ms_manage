@@ -89,7 +89,8 @@ docker exec ms-manage-magpie-runner \
 - current branch must be `main`;
 - clean working tree;
 - a global `flock` lock (`automation/magpie/state/run.lock`);
-- `MAGPIE_GATE_QUICK=1`, so `check-gate.ps1` skips `cargo-*` steps (Rust/Tauri Windows build is covered by GitHub Actions).
+- `MAGPIE_GATE_QUICK=1`, so `check-gate.ps1` skips `cargo-*` steps (Rust/Tauri Windows build is covered by GitHub Actions);
+- for `issues` / `community`, a precheck runs `get-feedback.ps1`; if there are **0** items, it writes an empty report and exits without invoking opencode (no model tokens consumed).
 
 ## Scheduling
 
@@ -97,16 +98,16 @@ docker exec ms-manage-magpie-runner \
 
 | loop | schedule |
 |---|---|
-| `issues` | every 30 minutes |
-| `community` | every 60 minutes |
+| `issues` | every 120 minutes |
+| `community` | every 240 minutes |
 | `nightly` | daily at 03:10 Asia/Shanghai |
 
 The schedule lives in the container, not in host cron, because this NAS user cannot write `/var/spool/cron`. If you prefer host cron, entries can still call:
 
 ```cron
-*/30 * * * * docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh issues
-0 * * * *    docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh community
-10 3 * * *   docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh nightly
+0 */2 * * * docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh issues
+0 */4 * * * docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh community
+10 3 * * *  docker exec ms-manage-magpie-runner bash /workspace/ms_manage/automation/magpie/linux/run-loop.sh nightly
 ```
 
 ## Credentials
