@@ -47,6 +47,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tauri::generate_context!() embeds ../dist into the Rust binary at
+      # compile time in non-dev builds. A bare `cargo check` on a fresh
+      # checkout has no dist/ and panics, so build the frontend first.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend (needed by tauri::generate_context!)
+        run: npm run build
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
