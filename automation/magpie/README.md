@@ -73,8 +73,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File automation/magpie/install-schedule
 
 | 任务 | 频率 | 说明 |
 |---|---|---|
-| `MSManage-Magpie-Issues` | 每 30 分钟 | 处理 issue / PR |
-| `MSManage-Magpie-Community` | 每 60 分钟 | 社区反馈、答疑 |
+| `MSManage-Magpie-Issues` | 每 120 分钟 | 处理 issue / PR |
+| `MSManage-Magpie-Community` | 每 240 分钟 | 社区反馈、答疑 |
 | `MSManage-Magpie-Nightly` | 每天 03:10 | 清理、错题本、发版 |
 
 > 计划任务默认以当前用户交互式运行，所以需要保持用户登录；如果要开机无人值守运行，改成“无论用户是否登录”并在任务计划程序中保存凭据。
