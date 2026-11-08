@@ -14,6 +14,7 @@
 
    把输出保存到 `automation/magpie/state/inbox-<stamp>.json` 后再读取。不要直接把大段 JSON 重复输出到对话里。
 3. 如果 `git status --porcelain` 非空，停止并在报告中说明，绝对不要碰用户未提交的改动。
+4. 如果收件箱 `count = 0`：写一份简短报告（无 issue、无动作、未跑 gate），立即结束。不要额外审计 GitHub Actions 历史、PR 列表或代码库；CI 健康检查属于 nightly 循环的职责。
 
 ## 1. 选择任务
 
